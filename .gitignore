@@ -1,0 +1,12 @@
+# Local server/runtime noise
+__pycache__/
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Optional generated screenshots
+dashboard-smoke.png

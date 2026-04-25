@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Device Datalog Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" hidden>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Device Datalog Dashboard</h1>
+            <p id="subtitle">Load the CSV to inspect signals, units, enums, and status bits.</p>
+          </div>
+
+        <section class="drop-zone" id="dropZone">
+          <input id="fileInput" type="file" accept=".csv,.txt" multiple />
+          <div class="drop-mark">+</div>
+          <div>
+            <strong>Drop datalog CSVs</strong>
+            <span>or click to choose files</span>
+          </div>
+        </section>
+          <div class="toolbar">
+            <button id="sampleButton" type="button">Load workspace sample</button>
+            <button id="clearDataButton" type="button">Clear data</button>
+            <button id="resetZoomButton" type="button">Reset view</button>
+          </div>
+        </header>
+
+        <nav class="tabbar" aria-label="Dashboard sections">
+          <button class="tab-button active" data-tab="trend" type="button">Trend</button>
+          <button class="tab-button" data-tab="series" type="button">Series</button>
+          <button class="tab-button" data-tab="dataset" type="button">Dataset</button>
+          <button class="tab-button" data-tab="status" type="button">Status</button>
+          <button class="tab-button" data-tab="enums" type="button">Enums</button>
+          <button class="tab-button" data-tab="preview" type="button">Preview</button>
+        </nav>
+
+        <section class="tab-panel active" data-panel="trend">
+          <section class="panel control-strip">
+            <label class="check-field">
+              <input id="statusOverlayToggle" type="checkbox" checked />
+              <span>Show status timeline</span>
+            </label>
+          </section>
+
+          <section class="plot-area">
+            <canvas id="plotCanvas" width="1200" height="520"></canvas>
+            <div class="plot-tooltip" id="plotTooltip"></div>
+            <div class="empty-state" id="emptyState">
+              <strong>No data loaded</strong>
+              <span>Drop the datalog CSV to start plotting.</span>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title row-title">
+              <span>Plot Columns</span>
+              <button class="small-button" id="clearPlotButton" type="button">Clear</button>
+            </div>
+            <div class="column-list plot-options" id="plotColumnList"></div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="series">
+          <section class="panel">
+            <div class="panel-title">Selected Series</div>
+            <div class="series-table-wrap">
+              <table class="data-table" id="seriesTable">
+                <thead>
+                  <tr>
+                    <th>Signal</th>
+                    <th>Unit</th>
+                    <th>Min</th>
+                    <th>Max</th>
+                    <th>Mean</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="dataset">
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Dataset</div>
+              <dl class="stats" id="datasetStats">
+                <div><dt>Status</dt><dd>Waiting for file</dd></div>
+              </dl>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Timestamp Gaps</div>
+              <div id="gapSummary" class="gap-summary muted">No timestamp data loaded yet.</div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="status">
+          <section class="panel">
+            <div class="panel-title">Status Bits</div>
+            <div id="bitSummary" class="bit-summary muted">No bitfield found yet.</div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="enums">
+          <section class="panel">
+            <div class="panel-title">Enums</div>
+            <div id="enumSummary" class="enum-summary muted">No enumerations found yet.</div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="preview">
+          <section class="panel wide">
+            <div class="panel-title">Data Preview</div>
+            <div class="preview-table-wrap">
+              <table class="data-table compact" id="previewTable"></table>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
