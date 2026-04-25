@@ -1,40 +1,41 @@
-# Device Datalog Dashboard
+# Dashboard Plus
 
-Local static prototype for loading a device datalog CSV, plotting selected columns, applying unit conversions, and decoding enum/bitfield columns from the encoded headers.
+Dashboard Plus is a static browser dashboard for correlating device datalog CSV trends with system-level debug and support logs.
 
-## Run
+It is based on the Device Datalog Dashboard and keeps the same no-build deployment model: open `index.html` through a local static server and load files from the browser.
 
-The local server is currently running at:
+## What It Loads
 
-```text
-http://127.0.0.1:5177/index.html
-```
+- Datalog CSV files with `Timestamp - UTC`
+- `debugDeviceInformation.json`
+- `allDatapoints.json`
+- `data/log/event.log*`
+- `data/log/jvm_agent.log`
+- `data/log/bootSlotJournal`
+- `data/log/watchdog.counter`
 
-If it is not running, start it from this folder:
+## Views
+
+- Trend: selected datalog signals with status and operations overlays
+- Operations: system events, errors, network recoveries, updates, and derived insights
+- Config: UnifiedDataAccess changes grouped by source and datapoint path
+- Runtime: JVM agent starts, full-GC events, and load outliers
+- Security: support/security posture events
+- Snapshot: device identity plus current health flags and counters from all datapoints
+- Series, Dataset, Status, Enums, Preview: inherited datalog inspection tools
+
+## Local Use
+
+From this folder:
 
 ```powershell
-python -m http.server 5177 --bind 127.0.0.1
+python -m http.server 5178
 ```
 
-Then open the URL above.
+Then open:
 
-## Current Features
+```text
+http://127.0.0.1:5178/index.html
+```
 
-- Drag/drop or file-picker CSV loading.
-- Workspace sample loading from `sample-datalog.csv`.
-- Automatic detection of the metadata rows and header row.
-- Time-series plotting with `Timestamp - UTC` as the default X axis.
-- Selectable numeric/state columns.
-- Unit conversions for temperature, flow, power, energy, volume, and pressure.
-- Raw, delta-from-first-sample, and rate-per-hour transforms.
-- Enumeration decoding from headers like `Medium_0_Water_1_PropyleneGlycol`.
-- Bitfield decoding for `MasterDeviceErrorStatus`.
-- Dataset summary, selected-series stats, enum summary, status-bit summary, and preview table.
-
-## Good Next Steps
-
-- Add zoom and pan on the plot.
-- Add CSV/XLSX support with SheetJS if Excel workbooks need to load directly.
-- Move inferred column metadata into an editable JSON schema.
-- Add separate state/event timeline views for bitfields and enums.
-- Add export of plots and decoded data.
+Drop one or more CSV files and/or support bundle files onto the upload area. The trend plot shares one time axis across datapoints and parsed operational events.

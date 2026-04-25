@@ -11,6 +11,9 @@
   --blue: #276bb6;
   --violet: #7258a8;
   --rose: #b23d65;
+  --danger: #b63737;
+  --security: #6d4da1;
+  --runtime: #2d6f8f;
   --shadow: 0 14px 35px rgba(23, 33, 38, 0.08);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -72,7 +75,7 @@ button:hover {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(280px, 360px) auto;
+  grid-template-columns: minmax(260px, 1fr) minmax(310px, 420px) auto;
   align-items: center;
   gap: 18px;
   margin-bottom: 14px;
@@ -139,7 +142,7 @@ p {
 
 .control-strip {
   display: grid;
-  grid-template-columns: auto;
+  grid-template-columns: repeat(2, auto);
   justify-content: start;
   align-items: end;
   gap: 12px;
@@ -470,30 +473,87 @@ canvas {
 
 .bit-summary,
 .enum-summary,
-.gap-summary {
+.gap-summary,
+.summary-list,
+.event-list,
+.insight-list {
   display: grid;
   gap: 8px;
 }
 
-.status-line {
+.status-line,
+.event-line,
+.insight-line {
   display: grid;
   gap: 3px;
   border-bottom: 1px solid #eef2f3;
   padding-bottom: 7px;
 }
 
-.status-line:last-child {
+.status-line:last-child,
+.event-line:last-child,
+.insight-line:last-child {
   border-bottom: 0;
   padding-bottom: 0;
 }
 
-.status-line strong {
+.status-line strong,
+.event-line strong,
+.insight-line strong {
   font-size: 13px;
 }
 
-.status-line span {
+.status-line span,
+.event-line span,
+.insight-line span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.event-line {
+  grid-template-columns: 170px minmax(120px, 0.4fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.event-line strong {
+  color: #2d3b41;
+}
+
+.badge {
+  display: inline-block;
+  width: max-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.45;
+  background: #eef2f3;
+  color: #39494f;
+}
+
+.badge.error {
+  background: #f8e7e4;
+  color: var(--danger);
+}
+
+.badge.security {
+  background: #eee9f7;
+  color: var(--security);
+}
+
+.badge.runtime {
+  background: #e6f0f2;
+  color: var(--runtime);
+}
+
+.badge.update {
+  background: #fff0df;
+  color: var(--warn);
+}
+
+.badge.system {
+  background: #e6f2ef;
+  color: var(--accent-strong);
 }
 
 @media (max-width: 1050px) {
@@ -539,6 +599,10 @@ canvas {
   .tab-button {
     min-width: 78px;
     padding-inline: 12px;
+  }
+
+  .event-line {
+    grid-template-columns: 1fr;
   }
 
   canvas {

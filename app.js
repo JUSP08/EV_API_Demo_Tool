@@ -1,6 +1,16 @@
 const SAMPLE_PATH = "./sample-datalog.csv";
 
 const COLORS = ["#0f7b6c", "#276bb6", "#b85418", "#7258a8", "#b23d65", "#50612c", "#8a4b2c"];
+const OPERATION_COLORS = {
+  error: "#b63737",
+  security: "#6d4da1",
+  update: "#b85418",
+  network: "#276bb6",
+  runtime: "#2d6f8f",
+  config: "#0f7b6c",
+  boot: "#7258a8",
+  system: "#60717a",
+};
 const GAP_THRESHOLD_SECONDS = 40;
 const UNIT_OPTIONS = {
   K: [
@@ -56,8 +66,10 @@ const state = {
   zoom: null,
   hitPoints: [],
   hitStatusEvents: [],
+  hitOperationEvents: [],
   plotBounds: null,
   dragZoom: null,
+  debug: emptyDebugState(),
 };
 
 const els = {
@@ -68,6 +80,7 @@ const els = {
   resetZoomButton: document.getElementById("resetZoomButton"),
   datasetStats: document.getElementById("datasetStats"),
   statusOverlayToggle: document.getElementById("statusOverlayToggle"),
+  operationsOverlayToggle: document.getElementById("operationsOverlayToggle"),
   plotColumnList: document.getElementById("plotColumnList"),
   clearPlotButton: document.getElementById("clearPlotButton"),
   tabButtons: document.querySelectorAll(".tab-button"),
@@ -81,6 +94,16 @@ const els = {
   enumSummary: document.getElementById("enumSummary"),
   previewTable: document.getElementById("previewTable"),
   subtitle: document.getElementById("subtitle"),
+  operationsStats: document.getElementById("operationsStats"),
+  insightSummary: document.getElementById("insightSummary"),
+  eventSummary: document.getElementById("eventSummary"),
+  sourceSummary: document.getElementById("sourceSummary"),
+  configSummary: document.getElementById("configSummary"),
+  runtimeStats: document.getElementById("runtimeStats"),
+  runtimeSummary: document.getElementById("runtimeSummary"),
+  securitySummary: document.getElementById("securitySummary"),
+  deviceSummary: document.getElementById("deviceSummary"),
+  snapshotSummary: document.getElementById("snapshotSummary"),
 };
 
 const ctx = els.canvas.getContext("2d");
@@ -100,7 +123,7 @@ els.dropZone.addEventListener("dragleave", () => els.dropZone.classList.remove("
 els.dropZone.addEventListener("drop", (event) => {
   event.preventDefault();
   els.dropZone.classList.remove("dragging");
-  const files = [...event.dataTransfer.files].filter((file) => /\.(csv|txt)$/i.test(file.name));
+  const files = [...event.dataTransfer.files];
   if (files.length) readFiles(files, state.rows.length > 0);
 });
 
@@ -125,6 +148,7 @@ els.resetZoomButton.addEventListener("click", () => {
 });
 
 els.statusOverlayToggle.addEventListener("change", drawPlot);
+els.operationsOverlayToggle.addEventListener("change", drawPlot);
 
 els.clearPlotButton.addEventListener("click", () => {
   state.selected.clear();
@@ -162,11 +186,18 @@ function readFiles(files, append) {
       loaded.push({ name: file.name, text: String(reader.result) });
       remaining -= 1;
       if (remaining === 0) {
-        loaded.forEach((item, index) => loadCsv(item.text, item.name, append || index > 0));
+        const csvFiles = loaded.filter((item) => isCsvLikeFile(item));
+        const debugFiles = loaded.filter((item) => !isCsvLikeFile(item));
+        csvFiles.forEach((item, index) => loadCsv(item.text, item.name, append || index > 0));
+        if (debugFiles.length) loadDebugFiles(debugFiles);
       }
     };
     reader.readAsText(file);
   });
+}
+
+function isCsvLikeFile(file) {
+  return /\.(csv|txt)$/i.test(file.name) && file.text.includes("Timestamp - UTC");
 }
 
 function loadCsv(text, filename, append = false) {
@@ -201,10 +232,145 @@ function loadCsv(text, filename, append = false) {
   });
   state.zoom = null;
 
-  els.subtitle.textContent = state.files.length === 1
-    ? state.files[0]
-    : `${state.files.length} files loaded`;
+  updateSubtitle();
   renderAll();
+}
+
+function loadDebugFiles(files) {
+  files.forEach((file) => {
+    const name = file.name.split(/[\\/]/).pop();
+    const lower = name.toLowerCase();
+    state.debug.files.push(name);
+
+    try {
+      if (lower === "debugdeviceinformation.json") {
+        state.debug.deviceInfo = JSON.parse(file.text);
+      } else if (lower === "alldatapoints.json") {
+        state.debug.datapoints = JSON.parse(file.text);
+      } else if (lower.startsWith("event.log")) {
+        const parsed = parseEventLog(file.text, name);
+        state.debug.events.push(...parsed.events);
+        state.debug.configChanges.push(...parsed.configChanges);
+      } else if (lower === "jvm_agent.log") {
+        state.debug.jvmEvents.push(...parseJvmLog(file.text, name));
+      } else if (lower === "bootslotjournal") {
+        state.debug.bootSlot = parseBootSlotJournal(file.text);
+      } else if (lower === "watchdog.counter") {
+        state.debug.watchdogCounter = Number(file.text.trim());
+      }
+    } catch (error) {
+      console.warn(`Could not parse ${name}`, error);
+    }
+  });
+
+  state.debug.events.sort((a, b) => a.time - b.time);
+  state.debug.configChanges.sort((a, b) => a.time - b.time);
+  state.debug.jvmEvents.sort((a, b) => a.time - b.time);
+  state.zoom = null;
+  updateSubtitle();
+  renderAll();
+}
+
+function parseEventLog(text, filename) {
+  const records = parseCsv(text).filter((row) => row.length >= 5);
+  const events = [];
+  const configChanges = [];
+
+  records.forEach((record) => {
+    const time = Number(record[0]);
+    if (!Number.isFinite(time)) return;
+    const severity = record[1] || "System";
+    const component = record[2] || "";
+    const subcomponent = record[3] || "";
+    const message = record.slice(4).join(",").trim();
+    const category = categorizeEvent(severity, component, message);
+    const event = { time, severity, component, subcomponent, message, category, file: filename };
+    events.push(event);
+
+    const change = parseConfigChange(event);
+    if (change) configChanges.push(change);
+  });
+
+  return { events, configChanges };
+}
+
+function categorizeEvent(severity, component, message) {
+  const text = `${severity} ${component} ${message}`.toLowerCase();
+  if (severity === "Security") return "security";
+  if (component.includes("NetworkInterfaceWatchdog")) return "network";
+  if (/update|rauc|ipkg|firmware/.test(text)) return "update";
+  if (/boot|modelexecutor|systemservice/.test(text)) return "boot";
+  if (severity === "Error") return "error";
+  if (component === "UnifiedDataAccess") return "config";
+  return "system";
+}
+
+function parseConfigChange(event) {
+  if (event.component !== "UnifiedDataAccess") return null;
+  const match = event.message.match(/New value: '([^']+)'='([^']*)'\. Source: (.*)$/);
+  if (!match) return null;
+  return {
+    time: event.time,
+    path: match[1],
+    value: match[2],
+    source: match[3],
+    event,
+  };
+}
+
+function parseJvmLog(text, filename) {
+  const events = [];
+  text.split(/\r?\n/).forEach((line) => {
+    const start = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) Starting agent version ([\d.]+)/);
+    if (start) {
+      events.push({
+        time: parseLocalTimestamp(start[1]),
+        category: "runtime",
+        type: "start",
+        label: `Agent ${start[2]} started`,
+        version: start[2],
+        message: line,
+        file: filename,
+      });
+      return;
+    }
+
+    const gc = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) Full GC: (\d+) millis, Load (\d+) millis in (\d+) secs/);
+    if (gc) {
+      events.push({
+        time: parseLocalTimestamp(gc[1]),
+        category: "runtime",
+        type: "gc",
+        label: `Full GC ${gc[2]} ms, load ${gc[3]} ms`,
+        gcMillis: Number(gc[2]),
+        loadMillis: Number(gc[3]),
+        windowSeconds: Number(gc[4]),
+        message: line,
+        file: filename,
+      });
+    }
+  });
+  return events.filter((event) => Number.isFinite(event.time));
+}
+
+function parseBootSlotJournal(text) {
+  const values = {};
+  text.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^([^=#]+)=([^#]+)$/);
+    if (match) values[match[1].trim()] = match[2].trim();
+  });
+  return values;
+}
+
+function parseLocalTimestamp(value) {
+  return new Date(value.replace(" ", "T")).getTime();
+}
+
+function updateSubtitle() {
+  const parts = [];
+  if (state.files.length) parts.push(`${state.files.length} datalog file${state.files.length === 1 ? "" : "s"}`);
+  if (state.debug.files.length) parts.push(`${state.debug.files.length} debug/support file${state.debug.files.length === 1 ? "" : "s"}`);
+  els.subtitle.textContent = parts.length ? `${parts.join(" + ")} loaded` : "Load datalog CSVs and debug/support logs to correlate trends with system operations.";
 }
 
 function parseDatalogCsv(text) {
@@ -237,9 +403,24 @@ function resetDataset() {
   state.zoom = null;
   state.hitPoints = [];
   state.hitStatusEvents = [];
+  state.hitOperationEvents = [];
   state.plotBounds = null;
   state.dragZoom = null;
-  els.subtitle.textContent = "Load the CSV to inspect signals, units, enums, and status bits.";
+  state.debug = emptyDebugState();
+  els.subtitle.textContent = "Load datalog CSVs and debug/support logs to correlate trends with system operations.";
+}
+
+function emptyDebugState() {
+  return {
+    files: [],
+    deviceInfo: null,
+    datapoints: null,
+    events: [],
+    configChanges: [],
+    jvmEvents: [],
+    bootSlot: null,
+    watchdogCounter: null,
+  };
 }
 
 function parseCsv(text) {
@@ -402,6 +583,11 @@ function defaultSelectedColumns(columns) {
 
 function renderAll() {
   renderStats();
+  renderOperations();
+  renderConfig();
+  renderRuntime();
+  renderSecurity();
+  renderSnapshot();
   renderColumnList();
   renderSeriesTable();
   renderBitSummary();
@@ -430,6 +616,167 @@ function renderStats() {
 
 function statLine(label, value) {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function renderOperations() {
+  const events = state.debug.events;
+  const categories = countBy(events, (event) => event.category);
+  const first = events[0]?.time;
+  const last = events[events.length - 1]?.time;
+
+  els.operationsStats.innerHTML = events.length ? [
+    statLine("Debug files", state.debug.files.length.toLocaleString()),
+    statLine("Events", events.length.toLocaleString()),
+    statLine("Errors", events.filter((event) => event.severity === "Error").length.toLocaleString()),
+    statLine("Security", events.filter((event) => event.severity === "Security").length.toLocaleString()),
+    statLine("Network recoveries", (categories.network ?? 0).toLocaleString()),
+    statLine("Range", `${formatShortDate(first)} to ${formatShortDate(last)}`),
+  ].join("") : statLine("Status", "Waiting for debug files");
+
+  const insights = buildInsights();
+  els.insightSummary.className = insights.length ? "insight-list" : "insight-list muted";
+  els.insightSummary.innerHTML = insights.length
+    ? insights.map((line) => `<div class="insight-line"><strong>${escapeHtml(line.title)}</strong><span>${escapeHtml(line.detail)}</span></div>`).join("")
+    : "No debug bundle loaded yet.";
+
+  const latest = [...events].sort((a, b) => b.time - a.time).slice(0, 80);
+  els.eventSummary.className = latest.length ? "event-list" : "event-list muted";
+  els.eventSummary.innerHTML = latest.length
+    ? latest.map(renderEventLine).join("")
+    : "Load event logs to see system, error, and update events.";
+}
+
+function renderConfig() {
+  const changes = state.debug.configChanges;
+  const sources = countBy(changes, (change) => change.source);
+  const paths = countBy(changes, (change) => change.path);
+
+  els.sourceSummary.className = changes.length ? "summary-list" : "summary-list muted";
+  els.sourceSummary.innerHTML = changes.length
+    ? topEntries(sources, 12).map(([name, count]) => renderSummaryLine(name, `${count.toLocaleString()} changes`)).join("")
+    : "No configuration changes loaded yet.";
+
+  els.configSummary.className = changes.length ? "summary-list" : "summary-list muted";
+  els.configSummary.innerHTML = changes.length
+    ? topEntries(paths, 16).map(([name, count]) => renderSummaryLine(shortenPath(name), `${count.toLocaleString()} changes`)).join("")
+    : "No UDA configuration changes found yet.";
+}
+
+function renderRuntime() {
+  const runtime = state.debug.jvmEvents;
+  const starts = runtime.filter((event) => event.type === "start");
+  const gcs = runtime.filter((event) => event.type === "gc");
+  const maxGc = Math.max(...gcs.map((event) => event.gcMillis), NaN);
+  const maxLoad = Math.max(...gcs.map((event) => event.loadMillis), NaN);
+  const versions = countBy(starts, (event) => event.version);
+
+  els.runtimeStats.innerHTML = runtime.length ? [
+    statLine("Agent starts", starts.length.toLocaleString()),
+    statLine("Full GC events", gcs.length.toLocaleString()),
+    statLine("Max GC", Number.isFinite(maxGc) ? `${maxGc.toLocaleString()} ms` : "n/a"),
+    statLine("Max load", Number.isFinite(maxLoad) ? `${maxLoad.toLocaleString()} ms` : "n/a"),
+    statLine("Versions", Object.keys(versions).join(", ") || "n/a"),
+  ].join("") : statLine("Status", "Waiting for JVM log");
+
+  const outliers = [...gcs].sort((a, b) => b.loadMillis - a.loadMillis).slice(0, 8);
+  els.runtimeSummary.className = outliers.length ? "summary-list" : "summary-list muted";
+  els.runtimeSummary.innerHTML = outliers.length
+    ? outliers.map((event) => renderSummaryLine(formatFullX(event.time), `GC ${event.gcMillis} ms, load ${event.loadMillis} ms in ${event.windowSeconds} sec`)).join("")
+    : "No JVM events loaded yet.";
+}
+
+function renderSecurity() {
+  const securityEvents = state.debug.events.filter((event) => event.severity === "Security");
+  const counts = countBy(securityEvents, (event) => event.message);
+  els.securitySummary.className = securityEvents.length ? "summary-list" : "summary-list muted";
+  els.securitySummary.innerHTML = securityEvents.length
+    ? topEntries(counts, 20).map(([message, count]) => renderSummaryLine(message, `${count.toLocaleString()} occurrences`)).join("")
+    : "No security events loaded yet.";
+}
+
+function renderSnapshot() {
+  const info = state.debug.deviceInfo;
+  if (!info) {
+    els.deviceSummary.innerHTML = statLine("Status", "Waiting for debugDeviceInformation.json");
+  } else {
+    els.deviceSummary.innerHTML = [
+      statLine("Serial", info.hardware?.["Serial number"] ?? "n/a"),
+      statLine("Platform", info.hardware?.Platform ?? "n/a"),
+      statLine("Active slot", info.software?.["Active Boot Slot"] ?? "n/a"),
+      statLine("CSP", info.software?.["Csp Version"] ?? "n/a"),
+      statLine("BSP", info.software?.["Bsp version"] ?? "n/a"),
+      statLine("Dataprofile", `${info.deviceDataprofileStatus?.["Dataprofile ID"] ?? "n/a"} ${info.deviceDataprofileStatus?.["Dataprofile Version"] ?? ""}`.trim()),
+      statLine("Export time", info.dateAndTime ?? "n/a"),
+    ].join("");
+  }
+
+  const notable = noteworthyDatapoints();
+  els.snapshotSummary.className = notable.length ? "summary-list" : "summary-list muted";
+  els.snapshotSummary.innerHTML = notable.length
+    ? notable.map(([name, value]) => renderSummaryLine(name, String(value))).join("")
+    : "No allDatapoints.json loaded yet.";
+}
+
+function buildInsights() {
+  const insights = [];
+  const network = state.debug.events.filter((event) => event.category === "network");
+  const updateErrors = state.debug.events.filter((event) => event.category === "update" && event.severity === "Error");
+  const securityEvents = state.debug.events.filter((event) => event.severity === "Security");
+  const starts = state.debug.jvmEvents.filter((event) => event.type === "start");
+  const datapoints = state.debug.datapoints ?? {};
+
+  if (network.length) insights.push({
+    title: "Network recovery loop detected",
+    detail: `${network.length.toLocaleString()} network watchdog recovery events were found.`,
+  });
+  if (updateErrors.length) insights.push({
+    title: "Update failures present",
+    detail: `${updateErrors.length.toLocaleString()} update-related errors can be overlaid with datalog trends.`,
+  });
+  if (securityEvents.length) insights.push({
+    title: "Security exposure markers present",
+    detail: `${securityEvents.length.toLocaleString()} security events report enabled privileged/support features.`,
+  });
+  if (starts.length) insights.push({
+    title: "Runtime restart history available",
+    detail: `${starts.length.toLocaleString()} JVM agent starts were parsed from the support log.`,
+  });
+  if (state.debug.watchdogCounter !== null) insights.push({
+    title: "Watchdog counter parsed",
+    detail: `Current watchdog counter value is ${state.debug.watchdogCounter}.`,
+  });
+  if (datapoints.collective_error === "true" || datapoints.collective_error === true) insights.push({
+    title: "Current snapshot reports collective error",
+    detail: "Use the Snapshot tab to inspect active flags and non-zero counters at export time.",
+  });
+  return insights;
+}
+
+function noteworthyDatapoints() {
+  const datapoints = state.debug.datapoints;
+  if (!datapoints) return [];
+  return Object.entries(datapoints)
+    .filter(([name, value]) => {
+      const text = String(value);
+      if (/^-?12345(?:\.0)?$/.test(text)) return false;
+      if (/^(false|0|0\.0|null|)$/i.test(text)) return false;
+      return /(err|error|not_ok|not_reached|watchdog|comm|alarm|warning|fault|collective|security|enabled|hours|days|-hrs|-days)/i.test(name);
+    })
+    .slice(0, 80);
+}
+
+function renderEventLine(event) {
+  return `
+    <div class="event-line">
+      <strong>${escapeHtml(formatFullX(event.time))}</strong>
+      <span class="badge ${escapeAttr(event.category)}">${escapeHtml(event.severity)} / ${escapeHtml(event.component || event.category)}</span>
+      <span>${escapeHtml(shorten(event.message, 180))}</span>
+    </div>
+  `;
+}
+
+function renderSummaryLine(title, detail) {
+  return `<div class="status-line"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
 }
 
 function renderColumnList() {
@@ -473,7 +820,7 @@ function renderColumnOption(column) {
         <input type="checkbox" data-column="${escapeAttr(column.header)}" ${checked} />
         <span>
           <strong>${escapeHtml(column.label)}</strong>
-          <span>${escapeHtml(column.registerId ? `Register ${column.registerId} · ${column.kind}` : column.kind)}</span>
+          <span>${escapeHtml(column.registerId ? `Register ${column.registerId} - ${column.kind}` : column.kind)}</span>
           ${unitSelect}
         </span>
       </label>
@@ -576,7 +923,7 @@ function renderBitSummary() {
     .map((line) => `
       <div class="status-line">
         <strong>Bit ${line.bit}: ${escapeHtml(line.name)}</strong>
-        <span>${line.count.toLocaleString()} rows · ${line.pct.toFixed(2)}%</span>
+        <span>${line.count.toLocaleString()} rows - ${line.pct.toFixed(2)}%</span>
       </div>
     `).join("") || `<div class="muted">No active bits in this file.</div>`;
 }
@@ -629,7 +976,7 @@ function renderGapSummary() {
     ${largest.map((gap) => `
       <div class="status-line">
         <strong>${formatDuration(gap.seconds)}</strong>
-        <span>${escapeHtml(gap.from)} to ${escapeHtml(gap.to)} · ~${gap.missing} missing</span>
+        <span>${escapeHtml(gap.from)} to ${escapeHtml(gap.to)} - ~${gap.missing} missing</span>
       </div>
     `).join("")}
   `;
@@ -708,30 +1055,37 @@ function drawPlot() {
   ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
   state.hitPoints = [];
   state.hitStatusEvents = [];
+  state.hitOperationEvents = [];
   hidePlotTooltip();
   const series = selectedSeries().filter((item) => item.points.length > 1);
-  els.emptyState.style.display = series.length ? "none" : "grid";
-  if (!series.length) return;
+  const operationLanes = els.operationsOverlayToggle.checked ? getOperationLanes() : [];
+  const timelinePoints = operationLanes.flatMap((lane) => lane.events.map((event) => event.time));
+  const allSeriesPoints = series.flatMap((item) => item.points);
+  const xValues = [...allSeriesPoints.map((point) => point.x), ...timelinePoints].filter(Number.isFinite);
+  els.emptyState.style.display = xValues.length ? "none" : "grid";
+  if (!xValues.length) return;
 
   const statusLanes = els.statusOverlayToggle.checked ? getStatusLanes() : [];
   const statusHeight = statusLanes.length ? 36 + statusLanes.length * 22 : 0;
-  const margin = { top: 26, right: 22, bottom: 58 + statusHeight, left: 90 };
+  const operationHeight = operationLanes.length ? 36 + operationLanes.length * 24 : 0;
+  const margin = { top: 26, right: 22, bottom: 58 + statusHeight + operationHeight, left: 90 };
   const width = els.canvas.width - margin.left - margin.right;
   const height = Math.max(180, els.canvas.height - margin.top - margin.bottom);
-  const allPoints = series.flatMap((item) => item.points);
-  const fullXExtent = extent(allPoints.map((point) => point.x));
+  const fullXExtent = extent(xValues);
+  padTimeExtent(fullXExtent);
   const xExtent = state.zoom ?? fullXExtent;
   const visibleSeries = series.map((item) => ({
     ...item,
     points: item.points.filter((point) => point.x >= xExtent[0] && point.x <= xExtent[1]),
   })).filter((item) => item.points.length > 1);
   const visiblePoints = visibleSeries.flatMap((item) => item.points);
-  if (!visiblePoints.length) {
+  const visibleOperationEvents = operationLanes.flatMap((lane) => lane.events).filter((event) => event.time >= xExtent[0] && event.time <= xExtent[1]);
+  if (!visiblePoints.length && !visibleOperationEvents.length) {
     state.zoom = null;
     drawPlot();
     return;
   }
-  const yExtent = extent(visiblePoints.map((point) => point.y));
+  const yExtent = visiblePoints.length ? extent(visiblePoints.map((point) => point.y)) : [0, 1];
   padExtent(yExtent);
   state.plotBounds = { margin, width, height, xExtent, yExtent, fullXExtent };
 
@@ -753,6 +1107,7 @@ function drawPlot() {
   });
 
   drawStatusTimeline(statusLanes, margin, width, height, xExtent);
+  drawOperationTimeline(operationLanes, margin, width, height, xExtent, statusLanes.length);
   drawZoomSelection();
   drawLegend(visibleSeries, margin);
 }
@@ -762,7 +1117,7 @@ function handlePlotHover(event) {
     updateZoomDrag(event);
     return;
   }
-  if (!state.hitPoints.length && !state.hitStatusEvents.length) return hidePlotTooltip();
+  if (!state.hitPoints.length && !state.hitStatusEvents.length && !state.hitOperationEvents.length) return hidePlotTooltip();
 
   const rect = els.canvas.getBoundingClientRect();
   const mouseX = event.clientX - rect.left;
@@ -772,6 +1127,13 @@ function handlePlotHover(event) {
     drawPlot();
     drawStatusHoverMarker(nearestStatus);
     showStatusTooltip(nearestStatus, rect);
+    return;
+  }
+  const nearestOperation = nearestOperationEvent(mouseX, mouseY);
+  if (nearestOperation) {
+    drawPlot();
+    drawOperationHoverMarker(nearestOperation);
+    showOperationTooltip(nearestOperation, rect);
     return;
   }
 
@@ -930,6 +1292,16 @@ function nearestStatusEvent(mouseX, mouseY) {
   return nearest;
 }
 
+function nearestOperationEvent(mouseX, mouseY) {
+  let nearest = null;
+  state.hitOperationEvents.forEach((hit) => {
+    const insideX = mouseX >= hit.x1 && mouseX <= hit.x2;
+    const insideY = mouseY >= hit.y1 && mouseY <= hit.y2;
+    if (insideX && insideY) nearest = hit;
+  });
+  return nearest;
+}
+
 function showStatusTooltip(hit, rect) {
   els.plotTooltip.innerHTML = `
     <strong>Bit ${hit.lane.bit}: ${escapeHtml(hit.lane.label)}</strong>
@@ -947,6 +1319,30 @@ function showStatusTooltip(hit, rect) {
 function drawStatusHoverMarker(hit) {
   ctx.save();
   ctx.strokeStyle = "#9b2f2f";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(hit.x1, hit.y1, hit.x2 - hit.x1, hit.y2 - hit.y1);
+  ctx.restore();
+}
+
+function showOperationTooltip(hit, rect) {
+  const event = hit.event;
+  const title = event.label || `${event.severity ?? "Event"} / ${event.component ?? hit.lane.label}`;
+  els.plotTooltip.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(formatFullX(event.time))}</span>
+    <span>${escapeHtml(shorten(event.message ?? "", 180))}</span>
+  `;
+  const tooltipWidth = 270;
+  const left = Math.min(rect.width - tooltipWidth - 10, Math.max(10, hit.x2 + 8));
+  const top = Math.max(10, hit.y1 - 52);
+  els.plotTooltip.style.left = `${left}px`;
+  els.plotTooltip.style.top = `${top}px`;
+  els.plotTooltip.style.display = "block";
+}
+
+function drawOperationHoverMarker(hit) {
+  ctx.save();
+  ctx.strokeStyle = OPERATION_COLORS[hit.lane.id] ?? "#39494f";
   ctx.lineWidth = 2;
   ctx.strokeRect(hit.x1, hit.y1, hit.x2 - hit.x1, hit.y2 - hit.y1);
   ctx.restore();
@@ -988,6 +1384,21 @@ function drawGapBands(margin, width, height, xExtent) {
     ctx.fillRect(x1, margin.top, Math.max(2, x2 - x1), height);
   });
   ctx.restore();
+}
+
+function getOperationLanes() {
+  const lanes = [
+    { id: "network", label: "Network recovery", events: state.debug.events.filter((event) => event.category === "network") },
+    { id: "error", label: "Errors", events: state.debug.events.filter((event) => event.severity === "Error" && event.category !== "network") },
+    { id: "update", label: "Updates", events: state.debug.events.filter((event) => event.category === "update") },
+    { id: "security", label: "Security", events: state.debug.events.filter((event) => event.severity === "Security") },
+    { id: "config", label: "Config changes", events: state.debug.configChanges.map((change) => ({ ...change.event, message: `${change.path} = ${change.value}`, source: change.source })) },
+    { id: "runtime", label: "Runtime / GC", events: state.debug.jvmEvents.map((event) => ({ ...event, severity: "Runtime", component: event.type === "start" ? "JVM start" : "Full GC" })) },
+    { id: "boot", label: "Boot / system", events: state.debug.events.filter((event) => event.category === "boot") },
+  ];
+  return lanes
+    .map((lane) => ({ ...lane, events: lane.events.filter((event) => Number.isFinite(event.time)).sort((a, b) => a.time - b.time) }))
+    .filter((lane) => lane.events.length);
 }
 
 function getStatusLanes() {
@@ -1103,6 +1514,47 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
   ctx.restore();
 }
 
+function drawOperationTimeline(lanes, margin, width, height, xExtent, statusLaneCount) {
+  if (!lanes.length) return;
+
+  const statusOffset = statusLaneCount ? 36 + statusLaneCount * 22 : 0;
+  const top = margin.top + height + 40 + statusOffset;
+  const laneHeight = 20;
+  const laneGap = 4;
+  const labelX = 8;
+
+  ctx.save();
+  ctx.font = "11px Inter, system-ui, sans-serif";
+  ctx.fillStyle = "#53656d";
+  ctx.fillText("Operations overlay", margin.left, top - 12);
+
+  lanes.forEach((lane, laneIndex) => {
+    const y = top + laneIndex * (laneHeight + laneGap);
+    const color = OPERATION_COLORS[lane.id] ?? OPERATION_COLORS.system;
+    ctx.fillStyle = "#eef2f3";
+    ctx.fillRect(margin.left, y, width, laneHeight);
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.fillRect(labelX, y + 2, margin.left - 16, laneHeight - 4);
+    ctx.fillStyle = "#253238";
+    ctx.fillText(shorten(lane.label, 32), labelX + 4, y + 14);
+
+    lane.events
+      .filter((event) => event.time >= xExtent[0] && event.time <= xExtent[1])
+      .forEach((event) => {
+        const x = margin.left + (event.time - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = event.severity === "Error" ? 0.96 : 0.78;
+        ctx.beginPath();
+        ctx.arc(x, y + laneHeight / 2, event.severity === "Error" ? 4.8 : 3.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        state.hitOperationEvents.push({ x1: x - 7, x2: x + 7, y1: y + 2, y2: y + laneHeight - 2, lane, event });
+      });
+  });
+  ctx.restore();
+}
+
 function fitCanvas() {
   const rect = els.canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
@@ -1181,6 +1633,17 @@ function padExtent(ext) {
   ext[1] += pad;
 }
 
+function padTimeExtent(ext) {
+  if (ext[0] === ext[1]) {
+    ext[0] -= 60 * 60 * 1000;
+    ext[1] += 60 * 60 * 1000;
+    return;
+  }
+  const pad = Math.max(60 * 1000, (ext[1] - ext[0]) * 0.02);
+  ext[0] -= pad;
+  ext[1] += pad;
+}
+
 function summarize(values) {
   if (!values.length) return { min: NaN, max: NaN, mean: NaN };
   const sum = values.reduce((total, value) => total + value, 0);
@@ -1207,6 +1670,11 @@ function formatFullX(value) {
   return formatNumber(value);
 }
 
+function formatShortDate(value) {
+  if (!Number.isFinite(value)) return "n/a";
+  return new Date(value).toISOString().slice(0, 10);
+}
+
 function formatDuration(seconds) {
   if (seconds < 90) return `${seconds.toFixed(0)} sec`;
   const minutes = seconds / 60;
@@ -1217,6 +1685,23 @@ function formatDuration(seconds) {
 function shorten(value, length) {
   const text = String(value);
   return text.length > length ? `${text.slice(0, length - 1)}...` : text;
+}
+
+function shortenPath(path) {
+  const parts = String(path).split("/");
+  return parts.length > 3 ? `.../${parts.slice(-3).join("/")}` : String(path);
+}
+
+function countBy(items, getKey) {
+  return items.reduce((counts, item) => {
+    const key = getKey(item) || "Unknown";
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function topEntries(counts, limit) {
+  return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
 }
 
 function escapeHtml(value) {
@@ -1233,4 +1718,4 @@ function escapeAttr(value) {
   return escapeHtml(value);
 }
 
-drawPlot();
+renderAll();

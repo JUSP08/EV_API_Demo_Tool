@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Device Datalog Dashboard</title>
+    <title>Dashboard Plus</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -14,16 +14,16 @@
       <section class="workspace">
         <header class="topbar">
           <div>
-            <h1>Device Datalog Dashboard</h1>
-            <p id="subtitle">Load the CSV to inspect signals, units, enums, and status bits.</p>
+            <h1>Dashboard Plus</h1>
+            <p id="subtitle">Load datalog CSVs and debug/support logs to correlate trends with system operations.</p>
           </div>
 
         <section class="drop-zone" id="dropZone">
-          <input id="fileInput" type="file" accept=".csv,.txt" multiple />
+          <input id="fileInput" type="file" multiple />
           <div class="drop-mark">+</div>
           <div>
-            <strong>Drop datalog CSVs</strong>
-            <span>or click to choose files</span>
+            <strong>Drop CSVs or debug bundle files</strong>
+            <span>or click to choose one or more files</span>
           </div>
         </section>
           <div class="toolbar">
@@ -35,6 +35,11 @@
 
         <nav class="tabbar" aria-label="Dashboard sections">
           <button class="tab-button active" data-tab="trend" type="button">Trend</button>
+          <button class="tab-button" data-tab="operations" type="button">Operations</button>
+          <button class="tab-button" data-tab="config" type="button">Config</button>
+          <button class="tab-button" data-tab="runtime" type="button">Runtime</button>
+          <button class="tab-button" data-tab="security" type="button">Security</button>
+          <button class="tab-button" data-tab="snapshot" type="button">Snapshot</button>
           <button class="tab-button" data-tab="series" type="button">Series</button>
           <button class="tab-button" data-tab="dataset" type="button">Dataset</button>
           <button class="tab-button" data-tab="status" type="button">Status</button>
@@ -47,6 +52,10 @@
             <label class="check-field">
               <input id="statusOverlayToggle" type="checkbox" checked />
               <span>Show status timeline</span>
+            </label>
+            <label class="check-field">
+              <input id="operationsOverlayToggle" type="checkbox" checked />
+              <span>Show operations overlay</span>
             </label>
           </section>
 
@@ -66,6 +75,75 @@
             </div>
             <div class="column-list plot-options" id="plotColumnList"></div>
           </section>
+        </section>
+
+        <section class="tab-panel" data-panel="operations">
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">System Summary</div>
+              <dl class="stats" id="operationsStats">
+                <div><dt>Status</dt><dd>Waiting for debug files</dd></div>
+              </dl>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Operational Insights</div>
+              <div id="insightSummary" class="insight-list muted">No debug bundle loaded yet.</div>
+            </section>
+          </div>
+          <section class="panel wide">
+            <div class="panel-title">Event Timeline</div>
+            <div id="eventSummary" class="event-list muted">Load event logs to see system, error, and update events.</div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="config">
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Change Sources</div>
+              <div id="sourceSummary" class="summary-list muted">No configuration changes loaded yet.</div>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Most Changed Paths</div>
+              <div id="configSummary" class="summary-list muted">No UDA configuration changes found yet.</div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="runtime">
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Runtime Stats</div>
+              <dl class="stats" id="runtimeStats">
+                <div><dt>Status</dt><dd>Waiting for JVM log</dd></div>
+              </dl>
+            </section>
+            <section class="panel">
+              <div class="panel-title">GC / Load Outliers</div>
+              <div id="runtimeSummary" class="summary-list muted">No JVM events loaded yet.</div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="security">
+          <section class="panel wide">
+            <div class="panel-title">Security Posture</div>
+            <div id="securitySummary" class="summary-list muted">No security events loaded yet.</div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="snapshot">
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Device Identity</div>
+              <dl class="stats" id="deviceSummary">
+                <div><dt>Status</dt><dd>Waiting for debugDeviceInformation.json</dd></div>
+              </dl>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Current Health Snapshot</div>
+              <div id="snapshotSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+            </section>
+          </div>
         </section>
 
         <section class="tab-panel" data-panel="series">
