@@ -1,16 +1,16 @@
 const SAMPLE_PATH = "./sample-datalog.csv";
 
-const COLORS = ["#0f7b6c", "#276bb6", "#b85418", "#7258a8", "#b23d65", "#50612c", "#8a4b2c"];
+const COLORS = ["#35c2a6", "#5ea1d8", "#e0a04b", "#b09ade", "#df7fa2", "#a0b96d", "#d0825d"];
 const OPERATION_COLORS = {
-  error: "#b63737",
-  security: "#6d4da1",
-  update: "#b85418",
-  network: "#276bb6",
-  runtime: "#2d6f8f",
-  config: "#0f7b6c",
-  control: "#50612c",
-  boot: "#7258a8",
-  system: "#60717a",
+  error: "#ec6b62",
+  security: "#c3a6ff",
+  update: "#e0a04b",
+  network: "#5ea1d8",
+  runtime: "#78c7d7",
+  config: "#35c2a6",
+  control: "#a0b96d",
+  boot: "#b09ade",
+  system: "#91a29c",
 };
 const GAP_THRESHOLD_SECONDS = 40;
 const CONTROL_MODE_COLUMN_INDEX = 17;
@@ -1629,7 +1629,7 @@ function handlePlotHover(event) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(nearest.x, nearest.y, 4.5, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = cssVar("--panel");
   ctx.fill();
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = nearest.series.color;
@@ -1741,8 +1741,8 @@ function drawZoomSelection() {
   const x1 = Math.min(state.dragZoom.startX, state.dragZoom.currentX);
   const x2 = Math.max(state.dragZoom.startX, state.dragZoom.currentX);
   ctx.save();
-  ctx.fillStyle = "rgba(39, 107, 182, 0.16)";
-  ctx.strokeStyle = "rgba(39, 107, 182, 0.6)";
+  ctx.fillStyle = "rgba(94, 161, 216, 0.18)";
+  ctx.strokeStyle = "rgba(94, 161, 216, 0.72)";
   ctx.lineWidth = 1;
   ctx.fillRect(x1, margin.top, x2 - x1, height);
   ctx.strokeRect(x1, margin.top, x2 - x1, height);
@@ -1790,7 +1790,7 @@ function showStatusTooltip(hit, rect) {
 
 function drawStatusHoverMarker(hit) {
   ctx.save();
-  ctx.strokeStyle = "#9b2f2f";
+  ctx.strokeStyle = cssVar("--danger");
   ctx.lineWidth = 2;
   ctx.strokeRect(hit.x1, hit.y1, hit.x2 - hit.x1, hit.y2 - hit.y1);
   ctx.restore();
@@ -1814,7 +1814,7 @@ function showOperationTooltip(hit, rect) {
 
 function drawOperationHoverMarker(hit) {
   ctx.save();
-  ctx.strokeStyle = OPERATION_COLORS[hit.lane.id] ?? "#39494f";
+  ctx.strokeStyle = OPERATION_COLORS[hit.lane.id] ?? cssVar("--muted");
   ctx.lineWidth = 2;
   ctx.strokeRect(hit.x1, hit.y1, hit.x2 - hit.x1, hit.y2 - hit.y1);
   ctx.restore();
@@ -1847,7 +1847,7 @@ function drawGapBands(margin, width, height, xExtent) {
   if (!gaps.length) return;
 
   ctx.save();
-  ctx.fillStyle = "rgba(210, 68, 68, 0.13)";
+  ctx.fillStyle = "rgba(236, 107, 98, 0.14)";
   gaps.forEach((gap) => {
     const start = Math.max(gap.start, xExtent[0]);
     const end = Math.min(gap.end, xExtent[1]);
@@ -2048,20 +2048,20 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
   const laneHeight = 18;
   const laneGap = 4;
   const labelX = 8;
-  const colors = ["#b85418", "#9a6231", "#b23d65", "#7258a8", "#276bb6", "#0f7b6c"];
+  const colors = ["#e0a04b", "#d0825d", "#df7fa2", "#b09ade", "#5ea1d8", "#35c2a6"];
 
   ctx.save();
   ctx.font = "11px Inter, system-ui, sans-serif";
-  ctx.fillStyle = "#53656d";
+  ctx.fillStyle = cssVar("--muted");
   ctx.fillText("Status and control state intervals", margin.left, top - 12);
 
   lanes.forEach((lane, laneIndex) => {
     const y = top + laneIndex * (laneHeight + laneGap);
     const color = colors[laneIndex % colors.length];
-    ctx.fillStyle = "#eef2f3";
+    ctx.fillStyle = cssVar("--panel-soft");
     ctx.fillRect(margin.left, y, width, laneHeight);
 
-    ctx.fillStyle = "#39494f";
+    ctx.fillStyle = cssVar("--muted");
     ctx.textAlign = "right";
     ctx.fillText(typeof lane.bit === "number" ? `B${lane.bit}` : lane.bit, margin.left - 8, y + 13);
     ctx.textAlign = "left";
@@ -2078,18 +2078,18 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
         ctx.fillRect(x1, y + 3, Math.max(3, x2 - x1), laneHeight - 6);
         ctx.globalAlpha = 1;
         if (lane.id === "controlMode") {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+          ctx.fillStyle = "rgba(13, 20, 18, 0.78)";
           ctx.fillRect(x1 + 3, y + 4, Math.min(Math.max(0, x2 - x1 - 6), 86), laneHeight - 8);
-          ctx.fillStyle = "#253238";
+          ctx.fillStyle = cssVar("--ink");
           ctx.fillText(shorten(segment.label, 14), x1 + 7, y + 13);
         }
         state.hitStatusEvents.push({ x1, x2: Math.max(x2, x1 + 3), y1: y + 2, y2: y + laneHeight - 2, lane, segment });
       });
 
     const label = shorten(lane.label, 34);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+    ctx.fillStyle = "rgba(13, 20, 18, 0.78)";
     ctx.fillRect(labelX, y + 2, margin.left - 16, laneHeight - 4);
-    ctx.fillStyle = "#253238";
+    ctx.fillStyle = cssVar("--ink");
     ctx.fillText(label, labelX + 4, y + 13);
   });
   ctx.restore();
@@ -2106,18 +2106,18 @@ function drawOperationTimeline(lanes, margin, width, height, xExtent, statusLane
 
   ctx.save();
   ctx.font = "11px Inter, system-ui, sans-serif";
-  ctx.fillStyle = "#53656d";
+  ctx.fillStyle = cssVar("--muted");
   ctx.fillText("Operations overlay", margin.left, top - 12);
 
   lanes.forEach((lane, laneIndex) => {
     const y = top + laneIndex * (laneHeight + laneGap);
     const color = OPERATION_COLORS[lane.id] ?? OPERATION_COLORS.system;
-    ctx.fillStyle = "#eef2f3";
+    ctx.fillStyle = cssVar("--panel-soft");
     ctx.fillRect(margin.left, y, width, laneHeight);
 
-    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.fillStyle = "rgba(13, 20, 18, 0.78)";
     ctx.fillRect(labelX, y + 2, margin.left - 16, laneHeight - 4);
-    ctx.fillStyle = "#253238";
+    ctx.fillStyle = cssVar("--ink");
     ctx.fillText(shorten(lane.label, 32), labelX + 4, y + 14);
 
     lane.events
@@ -2131,7 +2131,7 @@ function drawOperationTimeline(lanes, margin, width, height, xExtent, statusLane
         ctx.fill();
         ctx.globalAlpha = 1;
         if (lane.id === "control") {
-          ctx.fillStyle = "#253238";
+          ctx.fillStyle = cssVar("--ink");
           ctx.fillText(shorten(event.modeLabel ?? "", 14), x + 6, y + 14);
         }
         state.hitOperationEvents.push({ x1: x - 7, x2: x + 7, y1: y + 2, y2: y + laneHeight - 2, lane, event });
@@ -2151,8 +2151,8 @@ function fitCanvas() {
 }
 
 function drawGrid(margin, width, height, xExtent, yExtent) {
-  ctx.strokeStyle = "#dfe7e8";
-  ctx.fillStyle = "#53656d";
+  ctx.strokeStyle = cssVar("--canvas-grid");
+  ctx.fillStyle = cssVar("--muted");
   ctx.lineWidth = 1;
   ctx.font = "12px Inter, system-ui, sans-serif";
 
@@ -2176,7 +2176,7 @@ function drawGrid(margin, width, height, xExtent, yExtent) {
     ctx.fillText(formatX(value), x - 34, margin.top + height + 28);
   }
 
-  ctx.strokeStyle = "#829098";
+  ctx.strokeStyle = cssVar("--canvas-axis");
   ctx.strokeRect(margin.left, margin.top, width, height);
 }
 
@@ -2193,7 +2193,7 @@ function drawLegend(series, margin) {
     }
     ctx.fillStyle = item.color;
     ctx.fillRect(x, y - 9, 16, 3);
-    ctx.fillStyle = "#253238";
+    ctx.fillStyle = cssVar("--ink");
     ctx.fillText(label, x + 22, y - 5);
     x += width + 14;
   });
@@ -2287,6 +2287,10 @@ function countBy(items, getKey) {
 
 function topEntries(counts, limit) {
   return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 function escapeHtml(value) {
