@@ -18,6 +18,7 @@ const CONTROL_MODE_LABELS = new Map([
   [0, "Position"],
   [1, "Flow"],
   [2, "Power"],
+  [3, "DiffPress"],
   [99, "No Control"],
 ]);
 const OPERATIONAL_KNOWLEDGE_BASE = [
