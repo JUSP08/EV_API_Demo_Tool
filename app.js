@@ -99,6 +99,7 @@ const DEFAULT_DISPLAY_UNITS = {
 
 const state = {
   metadata: [],
+  devices: [],
   files: [],
   headers: [],
   rows: [],
@@ -107,9 +108,17 @@ const state = {
   units: new Map(),
   zoom: null,
   plotSearch: "",
+  compare: {
+    signal: "",
+    signals: [],
+    alignment: "absolute",
+    scale: "shared",
+  },
   hitPoints: [],
   hitStatusEvents: [],
   hitOperationEvents: [],
+  compareHitPoints: [],
+  compareStatusHits: [],
   plotBounds: null,
   dragZoom: null,
   debug: emptyDebugState(),
@@ -140,6 +149,17 @@ const els = {
   enumSummary: document.getElementById("enumSummary"),
   previewTable: document.getElementById("previewTable"),
   subtitle: document.getElementById("subtitle"),
+  compareSignalSelect: document.getElementById("compareSignalSelect"),
+  compareSignalSelect2: document.getElementById("compareSignalSelect2"),
+  compareSignalSelect3: document.getElementById("compareSignalSelect3"),
+  compareAlignmentSelect: document.getElementById("compareAlignmentSelect"),
+  compareScaleSelect: document.getElementById("compareScaleSelect"),
+  compareDeviceCount: document.getElementById("compareDeviceCount"),
+  compareReportSubtitle: document.getElementById("compareReportSubtitle"),
+  compareSummary: document.getElementById("compareSummary"),
+  comparePlots: document.getElementById("comparePlots"),
+  compareTooltip: document.getElementById("compareTooltip"),
+  exportComparePdfButton: document.getElementById("exportComparePdfButton"),
   operationsStats: document.getElementById("operationsStats"),
   insightSummary: document.getElementById("insightSummary"),
   eventSummary: document.getElementById("eventSummary"),
@@ -219,6 +239,32 @@ els.recommendedPlotButton.addEventListener("click", () => {
   renderSeriesTable();
 });
 
+[els.compareSignalSelect, els.compareSignalSelect2, els.compareSignalSelect3].forEach((select, index) => {
+  select.addEventListener("change", () => {
+    state.compare.signals[index] = select.value;
+    state.compare.signal = state.compare.signals[0] || "";
+    renderCompare();
+  });
+});
+
+els.compareAlignmentSelect.addEventListener("change", () => {
+  state.compare.alignment = els.compareAlignmentSelect.value;
+  renderCompare();
+});
+
+els.compareScaleSelect.addEventListener("change", () => {
+  state.compare.scale = els.compareScaleSelect.value;
+  renderCompare();
+});
+
+els.exportComparePdfButton.addEventListener("click", () => {
+  prepareComparePrint();
+  window.print();
+});
+
+els.comparePlots.addEventListener("mousemove", handleCompareHover);
+els.comparePlots.addEventListener("mouseleave", hideCompareTooltip);
+
 els.buildAiPayloadButton.addEventListener("click", () => {
   renderAiPayloadPreview();
 });
@@ -238,10 +284,14 @@ els.tabButtons.forEach((button) => {
     els.tabButtons.forEach((item) => item.classList.toggle("active", item === button));
     els.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab));
     if (tab === "trend") requestAnimationFrame(drawPlot);
+    if (tab === "compare") requestAnimationFrame(renderCompare);
   });
 });
 
-window.addEventListener("resize", drawPlot);
+window.addEventListener("resize", () => {
+  drawPlot();
+  requestAnimationFrame(() => drawComparePlots(compareRowsForSignals(selectedCompareSignals())));
+});
 window.addEventListener("mouseup", endZoomDrag);
 els.canvas.addEventListener("mousemove", handlePlotHover);
 els.canvas.addEventListener("mouseleave", () => {
@@ -279,6 +329,7 @@ function loadCsv(text, filename, append = false) {
   const parsed = parseDatalogCsv(text);
   const previousSelected = new Set(state.selected);
   const previousUnits = new Map(state.units);
+  const device = createDeviceDataset(parsed, filename);
 
   if (append && state.rows.length) {
     const sameHeaders = parsed.headers.length === state.headers.length
@@ -290,11 +341,13 @@ function loadCsv(text, filename, append = false) {
 
     state.rows = sortRowsByTime([...state.rows, ...parsed.rows]);
     state.files.push(filename);
+    addOrMergeDevice(device);
   } else {
     state.metadata = parsed.metadata;
     state.headers = parsed.headers;
     state.rows = sortRowsByTime(parsed.rows);
     state.files = [filename];
+    state.devices = [device];
   }
 
   state.columns = state.headers.map((header) => inferColumn(header, state.rows));
@@ -306,9 +359,48 @@ function loadCsv(text, filename, append = false) {
     state.units.set(column.header, previousUnits.get(column.header) ?? defaultUnit(column));
   });
   state.zoom = null;
+  if (!state.compare.signals.length || state.compare.signals.every((header) => !state.headers.includes(header))) {
+    state.compare.signals = defaultCompareSignals();
+    state.compare.signal = state.compare.signals[0] || "";
+  }
 
   updateSubtitle();
   renderAll();
+}
+
+function createDeviceDataset(parsed, filename) {
+  const metadata = Object.fromEntries(parsed.metadata.map((row) => [row[0], row.slice(1).join(", ")]));
+  const serial = metadata["Serial Number"]
+    || metadata["Serial number"]
+    || metadata.Serial
+    || inferSerialFromFilename(filename)
+    || filename.replace(/\.[^.]+$/, "");
+  const rows = sortRowsByTimeWithHeaders(parsed.rows, parsed.headers);
+  return {
+    id: serial,
+    name: serial,
+    files: [filename],
+    metadata: parsed.metadata,
+    headers: parsed.headers,
+    rows,
+    columns: parsed.headers.map((header) => inferColumn(header, rows)),
+  };
+}
+
+function addOrMergeDevice(device) {
+  const existing = state.devices.find((item) => item.id === device.id);
+  if (!existing) {
+    state.devices.push(device);
+    return;
+  }
+  existing.files.push(...device.files);
+  existing.rows = sortRowsByTimeWithHeaders([...existing.rows, ...device.rows], existing.headers);
+  existing.columns = existing.headers.map((header) => inferColumn(header, existing.rows));
+}
+
+function inferSerialFromFilename(filename) {
+  const match = filename.match(/\d{5}-\d{5}-\d{3}-\d{3}-\d{3}|\d{5}-\d{5}-\d{3}-\d{3}/);
+  return match ? match[0] : "";
 }
 
 function loadDebugFiles(files) {
@@ -467,8 +559,14 @@ function sortRowsByTime(rows) {
   return [...rows].sort((a, b) => parseTimestamp(a["Timestamp - UTC"]) - parseTimestamp(b["Timestamp - UTC"]));
 }
 
+function sortRowsByTimeWithHeaders(rows, headers) {
+  if (!headers.includes("Timestamp - UTC") && !rows.some((row) => row["Timestamp - UTC"])) return rows;
+  return [...rows].sort((a, b) => parseTimestamp(a["Timestamp - UTC"]) - parseTimestamp(b["Timestamp - UTC"]));
+}
+
 function resetDataset() {
   state.metadata = [];
+  state.devices = [];
   state.files = [];
   state.headers = [];
   state.rows = [];
@@ -477,13 +575,20 @@ function resetDataset() {
   state.units = new Map();
   state.zoom = null;
   state.plotSearch = "";
+  state.compare = { signal: "", signals: [], alignment: "absolute", scale: "shared" };
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
+  state.compareHitPoints = [];
+  state.compareStatusHits = [];
   state.plotBounds = null;
   state.dragZoom = null;
   state.debug = emptyDebugState();
   els.plotColumnSearch.value = "";
+  hideCompareTooltip();
+  els.compareSignalSelect.innerHTML = "";
+  els.compareSignalSelect2.innerHTML = "";
+  els.compareSignalSelect3.innerHTML = "";
   els.subtitle.textContent = "Load datalog CSVs and debug/support logs to correlate trends with system operations.";
 }
 
@@ -664,6 +769,7 @@ function defaultSelectedColumns(columns) {
 
 function renderAll() {
   renderStats();
+  renderCompare();
   renderOperations();
   renderConfig();
   renderRuntime();
@@ -698,6 +804,525 @@ function renderStats() {
 
 function statLine(label, value) {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function renderCompare() {
+  const signals = commonCompareSignals();
+  if (!signals.length || !state.devices.length) {
+    state.compareHitPoints = [];
+    state.compareStatusHits = [];
+    hideCompareTooltip();
+    els.compareDeviceCount.textContent = "0 EVs";
+    els.compareSignalSelect.innerHTML = `<option value="">No common signals</option>`;
+    els.compareSignalSelect2.innerHTML = `<option value="">No common signals</option>`;
+    els.compareSignalSelect3.innerHTML = `<option value="">No common signals</option>`;
+    els.compareSummary.className = "summary-list muted";
+    els.compareSummary.textContent = "Load two or more EV trend CSVs to compare.";
+    els.comparePlots.innerHTML = "";
+    return;
+  }
+
+  const signalHeaders = new Set(signals.map((signal) => signal.header));
+  if (!state.compare.signals.length) state.compare.signals = defaultCompareSignals();
+  state.compare.signals = [0, 1, 2].map((index) => signalHeaders.has(state.compare.signals[index]) ? state.compare.signals[index] : "");
+  if (!state.compare.signals[0]) state.compare.signals[0] = signals[0].header;
+  state.compare.signal = state.compare.signals[0];
+
+  renderCompareSignalSelect(els.compareSignalSelect, signals, state.compare.signals[0], false);
+  renderCompareSignalSelect(els.compareSignalSelect2, signals, state.compare.signals[1], true);
+  renderCompareSignalSelect(els.compareSignalSelect3, signals, state.compare.signals[2], true);
+  els.compareAlignmentSelect.value = state.compare.alignment;
+  els.compareScaleSelect.value = state.compare.scale;
+  els.compareDeviceCount.textContent = `${state.devices.length.toLocaleString()} EV${state.devices.length === 1 ? "" : "s"}`;
+
+  const rows = compareRowsForSignals(selectedCompareSignals());
+  els.compareSummary.className = "summary-list";
+  els.compareSummary.innerHTML = renderCompareSummary(rows);
+  els.comparePlots.innerHTML = rows.map((row, index) => `
+    <div class="compare-row">
+      <div class="compare-meta">
+        <strong>${escapeHtml(row.device.name)}</strong>
+        <span>${row.device.files.length.toLocaleString()} file${row.device.files.length === 1 ? "" : "s"}</span>
+        <span>${row.points.length.toLocaleString()} samples</span>
+        <span>${row.rangeLabel}</span>
+      </div>
+      <canvas class="compare-canvas" data-compare-index="${index}" height="330"></canvas>
+    </div>
+  `).join("");
+  requestAnimationFrame(() => drawComparePlots(rows));
+}
+
+function prepareComparePrint() {
+  const signals = selectedCompareSignals()
+    .map((header) => commonCompareSignals().find((signal) => signal.header === header)?.label)
+    .filter(Boolean);
+  els.compareReportSubtitle.textContent = [
+    `${state.devices.length.toLocaleString()} EV${state.devices.length === 1 ? "" : "s"}`,
+    signals.length ? `Signals: ${signals.join(", ")}` : "No signals selected",
+    state.compare.alignment === "relative" ? "Relative start alignment" : "Absolute time alignment",
+    new Date().toLocaleString(),
+  ].join(" | ");
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+}
+
+function renderCompareSignalSelect(select, signals, selected, allowNone) {
+  select.innerHTML = [
+    allowNone ? `<option value="">None</option>` : "",
+    ...signals.map((signal) => `
+      <option value="${escapeAttr(signal.header)}" ${signal.header === selected ? "selected" : ""}>
+        ${escapeHtml(signal.label)}
+      </option>
+    `),
+  ].join("");
+}
+
+function commonCompareSignals() {
+  if (!state.devices.length) return [];
+  const headerSets = state.devices.map((device) => new Set(device.headers));
+  return state.devices[0].columns
+    .filter(isPlottableColumn)
+    .filter((column) => headerSets.every((set) => set.has(column.header)))
+    .sort((a, b) => compareSignalRank(a) - compareSignalRank(b) || a.label.localeCompare(b.label, undefined, { numeric: true }));
+}
+
+function compareSignalRank(column) {
+  const text = `${column.header} ${column.label}`.toLowerCase();
+  if (/waterflow|flow|position|setpoint|power|differential.*pressure|temperature/.test(text)) return 0;
+  if (/energy|volume|delta|glycol/.test(text)) return 1;
+  if (/status|error|warning|watchdog/.test(text)) return 2;
+  return 3;
+}
+
+function defaultCompareSignal() {
+  return commonCompareSignals()[0]?.header || "";
+}
+
+function defaultCompareSignals() {
+  const signals = commonCompareSignals();
+  const preferred = [
+    "2303: AbsoluteWaterFlow_m3/sec",
+    "12: RelativePosition_%",
+    "2304: AbsolutePower_W",
+    "4320: AbsoluteDifferentialWaterPressure_Pa",
+  ];
+  const selected = preferred.filter((header) => signals.some((signal) => signal.header === header));
+  return [...selected, ...signals.map((signal) => signal.header)].filter((header, index, all) => header && all.indexOf(header) === index).slice(0, 3);
+}
+
+function selectedCompareSignals() {
+  return state.compare.signals.filter((header, index, all) => header && all.indexOf(header) === index).slice(0, 3);
+}
+
+function compareRowsForSignal(header) {
+  return compareRowsForSignals(header ? [header] : []);
+}
+
+function compareRowsForSignals(headers) {
+  return state.devices.map((device) => {
+    const baseTime = parseTimestamp(device.rows.find((row) => Number.isFinite(parseTimestamp(row["Timestamp - UTC"])))?.["Timestamp - UTC"]);
+    const series = headers.map((header, index) => {
+      const column = device.columns.find((item) => item.header === header);
+      if (!column) return null;
+      const unit = state.units.get(header) ?? defaultUnit(column);
+      const converter = converterFor(column, unit);
+      const points = device.rows.map((row, rowIndex) => {
+        const time = parseX(row["Timestamp - UTC"], rowIndex);
+        const raw = Number(row[header]);
+        if (!Number.isFinite(time) || !Number.isFinite(raw)) return null;
+        return {
+          x: state.compare.alignment === "relative" && Number.isFinite(baseTime) ? time - baseTime : time,
+          originalTime: time,
+          y: converter(raw),
+          raw,
+        };
+      }).filter(Boolean);
+      return {
+        header,
+        column,
+        unit,
+        points,
+        color: COLORS[index % COLORS.length],
+        stats: summarize(points.map((point) => point.y)),
+      };
+    }).filter((item) => item && item.points.length);
+    const allPoints = series.flatMap((item) => item.points).sort((a, b) => a.originalTime - b.originalTime);
+    const first = allPoints[0]?.originalTime;
+    const last = allPoints[allPoints.length - 1]?.originalTime;
+    return {
+      device,
+      series,
+      points: allPoints,
+      rangeLabel: Number.isFinite(first) && Number.isFinite(last) ? `${formatShortDate(first)} to ${formatShortDate(last)}` : "No timestamp range",
+    };
+  }).filter((row) => row && row.series.length && row.points.length);
+}
+
+function renderCompareSummary(rows) {
+  if (!rows.length) return `<div class="muted">No comparable samples for this signal.</div>`;
+  const selected = selectedCompareSignals();
+  const signalLines = selected.map((header, index) => {
+    const rowSeries = rows.map((row) => ({ row, series: row.series.find((item) => item.header === header) })).filter((item) => item.series);
+    if (!rowSeries.length) return "";
+    const highest = [...rowSeries].sort((a, b) => b.series.stats.max - a.series.stats.max)[0];
+    const lowest = [...rowSeries].sort((a, b) => a.series.stats.min - b.series.stats.min)[0];
+    const label = rowSeries[0].series.column.label;
+    const unit = rowSeries[0].series.unit;
+    return `
+      <div class="status-line">
+        <strong><span class="badge system" style="color:${COLORS[index % COLORS.length]}">${escapeHtml(label)}</span></strong>
+        <span>Highest max: ${escapeHtml(highest.row.device.name)} ${formatNumber(highest.series.stats.max)}${unit ? ` ${escapeHtml(unit)}` : ""}; lowest min: ${escapeHtml(lowest.row.device.name)} ${formatNumber(lowest.series.stats.min)}${unit ? ` ${escapeHtml(unit)}` : ""}</span>
+      </div>
+    `;
+  }).join("");
+  return `
+    <div class="status-line">
+      <strong>${selected.length.toLocaleString()} global signal${selected.length === 1 ? "" : "s"}</strong>
+      <span>${rows.length.toLocaleString()} EV${rows.length === 1 ? "" : "s"} compared using ${state.compare.alignment === "relative" ? "relative start alignment" : "absolute timestamps"}.</span>
+    </div>
+    ${signalLines}
+  `;
+}
+
+function drawComparePlots(rows) {
+  state.compareHitPoints = [];
+  state.compareStatusHits = [];
+  hideCompareTooltip();
+  if (!rows.length) return;
+  const allPoints = rows.flatMap((row) => row.points);
+  const sharedX = extent(allPoints.map((point) => point.x));
+  const sharedYByHeader = {};
+  selectedCompareSignals().forEach((header) => {
+    const points = rows.flatMap((row) => row.series.find((item) => item.header === header)?.points ?? []);
+    if (points.length) {
+      sharedYByHeader[header] = extent(points.map((point) => point.y));
+      padExtent(sharedYByHeader[header]);
+    }
+  });
+  padTimeExtent(sharedX);
+
+  document.querySelectorAll(".compare-canvas").forEach((canvas) => {
+    const index = Number(canvas.dataset.compareIndex);
+    const row = rows[index];
+    if (!row) return;
+    drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, index);
+  });
+}
+
+function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.max(320, Math.floor(rect.width * scale));
+  canvas.height = Math.max(140, Math.floor(rect.height * scale));
+  const local = canvas.getContext("2d");
+  local.setTransform(scale, 0, 0, scale, 0, 0);
+  const width = rect.width;
+  const height = rect.height;
+  const margin = { top: 18, right: 18, bottom: 34, left: 70 };
+  const plotW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+  const statusLanes = getCompareStatusLanes(row.device);
+  const statusBlockH = statusLanes.length ? 24 + statusLanes.length * 22 : 0;
+  const plotInnerH = Math.max(110, innerH - statusBlockH);
+  const laneGap = 10;
+  const laneH = (plotInnerH - Math.max(0, row.series.length - 1) * laneGap) / row.series.length;
+  const xExtent = sharedX;
+
+  local.clearRect(0, 0, width, height);
+  local.fillStyle = cssVar("--canvas");
+  local.fillRect(0, 0, width, height);
+  local.font = "11px Inter, system-ui, sans-serif";
+
+  row.series.forEach((series, laneIndex) => {
+    const top = margin.top + laneIndex * (laneH + laneGap);
+    const yExtent = state.compare.scale === "shared" && sharedYByHeader[series.header]
+      ? [...sharedYByHeader[series.header]]
+      : extent(series.points.map((point) => point.y));
+    padExtent(yExtent);
+
+    local.strokeStyle = cssVar("--canvas-grid");
+    local.fillStyle = cssVar("--muted");
+    for (let i = 0; i <= 2; i += 1) {
+      const y = top + i / 2 * laneH;
+      const value = yExtent[1] - i / 2 * (yExtent[1] - yExtent[0]);
+      local.beginPath();
+      local.moveTo(margin.left, y);
+      local.lineTo(margin.left + plotW, y);
+      local.stroke();
+      local.fillText(formatNumber(value), 8, y + 4);
+    }
+
+    local.strokeStyle = cssVar("--canvas-axis");
+    local.strokeRect(margin.left, top, plotW, laneH);
+    local.fillStyle = series.color;
+    local.fillText(shorten(series.column.label, 34), margin.left + 8, top + 14);
+    local.strokeStyle = series.color;
+    local.lineWidth = 2;
+    local.beginPath();
+    const sampleStep = Math.max(1, Math.ceil(series.points.length / 900));
+    series.points.forEach((point, index) => {
+      const x = margin.left + (point.x - xExtent[0]) / (xExtent[1] - xExtent[0]) * plotW;
+      const y = top + laneH - (point.y - yExtent[0]) / (yExtent[1] - yExtent[0]) * laneH;
+      if (index === 0) local.moveTo(x, y);
+      else local.lineTo(x, y);
+      if (index % sampleStep === 0 || index === series.points.length - 1) {
+        state.compareHitPoints.push({
+          canvas,
+          rowIndex,
+          laneIndex,
+          x,
+          y,
+          point,
+          series,
+          row,
+        });
+      }
+    });
+    local.stroke();
+  });
+
+  drawCompareStatusBands(local, row, statusLanes, margin, plotW, margin.top + plotInnerH + 22, xExtent);
+
+  local.fillStyle = cssVar("--muted");
+  const startLabel = state.compare.alignment === "relative" ? "0" : formatX(xExtent[0]);
+  const endLabel = state.compare.alignment === "relative" ? formatDuration((xExtent[1] - xExtent[0]) / 1000) : formatX(xExtent[1]);
+  local.fillText(startLabel, margin.left, height - 10);
+  local.fillText(endLabel, Math.max(margin.left, margin.left + plotW - 78), height - 10);
+}
+
+function getCompareStatusLanes(device) {
+  return [getCompareControlModeLane(device), getCompareErrorStateLane(device)].filter(Boolean);
+}
+
+function getCompareControlModeLane(device) {
+  const header = getDeviceControlModeHeader(device);
+  if (!header) return null;
+  const baseTime = firstDeviceTime(device);
+  const samples = device.rows.map((dataRow) => {
+    const time = parseTimestamp(dataRow["Timestamp - UTC"]);
+    const value = Number(dataRow[header]);
+    if (!Number.isFinite(time) || !Number.isFinite(value)) return null;
+    return {
+      time: compareStatusTime(time, baseTime),
+      value,
+      label: controlModeLabel(value),
+    };
+  }).filter(Boolean);
+  const segments = buildCompareStateSegments(samples);
+  return segments.length ? { id: "controlMode", bit: "CM", label: "Control mode", segments } : null;
+}
+
+function getCompareErrorStateLane(device) {
+  const column = findCompareErrorStateColumn(device);
+  if (!column) return null;
+  const baseTime = firstDeviceTime(device);
+  const samples = device.rows.map((dataRow) => {
+    const time = parseTimestamp(dataRow["Timestamp - UTC"]);
+    const value = Number(dataRow[column.header]);
+    if (!Number.isFinite(time) || !Number.isFinite(value)) return null;
+    return {
+      time: compareStatusTime(time, baseTime),
+      value,
+      label: errorStateLabel(column, value),
+    };
+  }).filter(Boolean);
+  const segments = buildCompareStateSegments(samples);
+  return segments.length ? { id: "errorState", bit: "ERR", label: "Error state", segments } : null;
+}
+
+function buildCompareStateSegments(samples) {
+  const segments = [];
+  let active = null;
+  samples.forEach((sample, index) => {
+    const next = samples[index + 1];
+    if (!active || active.value !== sample.value || active.label !== sample.label) {
+      if (active && sample.time > active.start) {
+        segments.push({ start: active.start, end: sample.time, value: active.value, label: active.label });
+      }
+      active = { start: sample.time, value: sample.value, label: sample.label };
+    }
+    if (!next && active) {
+      const end = sample.time > active.start ? sample.time : active.start + 1;
+      segments.push({ start: active.start, end, value: active.value, label: active.label });
+    }
+  });
+  return segments;
+}
+
+function getDeviceControlModeHeader(device) {
+  if (!device.headers.length) return "";
+  return device.headers.find((header) => /control.?mode|SelectWaterControlMode|WaterControlMode/i.test(header))
+    || device.headers[CONTROL_MODE_COLUMN_INDEX]
+    || "";
+}
+
+function findCompareErrorStateColumn(device) {
+  const candidates = device.columns.filter((column) => column.kind === "bitfield" || column.kind === "state" || column.kind === "enum");
+  return candidates.find((column) => /error.?state|device.?error.?status|error.?status/i.test(column.header))
+    || candidates.find((column) => /fault|alarm|warning|watchdog/i.test(column.header))
+    || candidates.find((column) => column.kind === "bitfield")
+    || null;
+}
+
+function errorStateLabel(column, value) {
+  if (column.bitMap.length) {
+    if (!value) return "No active error";
+    const labels = labelsForMask(column, value);
+    return labels.length ? labels.join(", ") : `Mask ${value}`;
+  }
+  if (column.enumMap.has(value)) return column.enumMap.get(value);
+  return value ? `State ${value}` : "No active error";
+}
+
+function firstDeviceTime(device) {
+  return parseTimestamp(device.rows.find((dataRow) => Number.isFinite(parseTimestamp(dataRow["Timestamp - UTC"])))?.["Timestamp - UTC"]);
+}
+
+function compareStatusTime(time, baseTime) {
+  return state.compare.alignment === "relative" && Number.isFinite(baseTime) ? time - baseTime : time;
+}
+
+function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) {
+  if (!lanes.length) return;
+  const laneHeight = 18;
+  const laneGap = 4;
+  const colors = ["#e0a04b", "#ec6b62"];
+
+  local.save();
+  local.font = "11px Inter, system-ui, sans-serif";
+  local.fillStyle = cssVar("--muted");
+  local.fillText("Status indicators", margin.left, top - 8);
+
+  lanes.forEach((lane, laneIndex) => {
+    const y = top + laneIndex * (laneHeight + laneGap);
+    const color = colors[laneIndex % colors.length];
+    local.fillStyle = cssVar("--panel-soft");
+    local.fillRect(margin.left, y, width, laneHeight);
+
+    local.fillStyle = cssVar("--muted");
+    local.textAlign = "right";
+    local.fillText(lane.bit, margin.left - 8, y + 13);
+    local.textAlign = "left";
+
+    lane.segments
+      .filter((segment) => segment.end >= xExtent[0] && segment.start <= xExtent[1])
+      .forEach((segment) => {
+        const start = Math.max(segment.start, xExtent[0]);
+        const end = Math.min(segment.end, xExtent[1]);
+        const x1 = margin.left + (start - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+        const x2 = margin.left + (end - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+        const activeColor = lane.id === "errorState" && !segment.value ? "#35c2a6" : color;
+        local.fillStyle = activeColor;
+        local.globalAlpha = lane.id === "errorState" && !segment.value ? 0.42 : 0.84;
+        local.fillRect(x1, y + 3, Math.max(3, x2 - x1), laneHeight - 6);
+        local.globalAlpha = 1;
+
+        if (x2 - x1 > 42) {
+          local.fillStyle = "rgba(13, 20, 18, 0.78)";
+          local.fillRect(x1 + 3, y + 4, Math.min(Math.max(0, x2 - x1 - 6), 118), laneHeight - 8);
+          local.fillStyle = cssVar("--ink");
+          local.fillText(shorten(segment.label, 18), x1 + 7, y + 13);
+        }
+
+        state.compareStatusHits.push({
+          canvas: local.canvas,
+          row,
+          lane,
+          segment,
+          x1,
+          x2: Math.max(x2, x1 + 3),
+          y1: y + 2,
+          y2: y + laneHeight - 2,
+        });
+      });
+
+    local.fillStyle = "rgba(13, 20, 18, 0.78)";
+    local.fillRect(8, y + 2, margin.left - 16, laneHeight - 4);
+    local.fillStyle = cssVar("--ink");
+    local.fillText(shorten(lane.label, 18), 12, y + 13);
+  });
+  local.restore();
+}
+
+function handleCompareHover(event) {
+  if (!state.compareHitPoints.length && !state.compareStatusHits.length) return hideCompareTooltip();
+  const canvas = event.target.closest?.(".compare-canvas");
+  if (!canvas) return hideCompareTooltip();
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+
+  const statusHit = state.compareStatusHits.find((hit) => (
+    hit.canvas === canvas
+    && mouseX >= hit.x1
+    && mouseX <= hit.x2
+    && mouseY >= hit.y1
+    && mouseY <= hit.y2
+  ));
+  if (statusHit) {
+    showCompareStatusTooltip(statusHit, rect);
+    return;
+  }
+
+  let nearest = null;
+  let nearestDistance = Infinity;
+  state.compareHitPoints.forEach((hit) => {
+    if (hit.canvas !== canvas) return;
+    const distance = Math.hypot(hit.x - mouseX, hit.y - mouseY);
+    if (distance < nearestDistance) {
+      nearest = hit;
+      nearestDistance = distance;
+    }
+  });
+
+  if (!nearest || nearestDistance > 34) return hideCompareTooltip();
+  showCompareTooltip(nearest, rect);
+}
+
+function showCompareTooltip(hit, canvasRect) {
+  const wrapRect = els.comparePlots.parentElement.getBoundingClientRect();
+  const timeLabel = state.compare.alignment === "relative"
+    ? formatDuration(hit.point.x / 1000)
+    : formatFullX(hit.point.originalTime);
+  els.compareTooltip.innerHTML = `
+    <strong>${escapeHtml(hit.series.column.label)}</strong>
+    <span>${escapeHtml(hit.row.device.name)}</span>
+    <span>${escapeHtml(timeLabel)}</span>
+    <span>${escapeHtml(`${formatNumber(hit.point.y)}${hit.series.unit ? ` ${hit.series.unit}` : ""}`)}</span>
+  `;
+  const localLeft = canvasRect.left - wrapRect.left + hit.x + 12;
+  const localTop = canvasRect.top - wrapRect.top + hit.y - 58;
+  const tooltipWidth = 250;
+  els.compareTooltip.style.left = `${Math.min(wrapRect.width - tooltipWidth - 10, Math.max(10, localLeft))}px`;
+  els.compareTooltip.style.top = `${Math.max(10, localTop)}px`;
+  els.compareTooltip.style.display = "block";
+}
+
+function showCompareStatusTooltip(hit, canvasRect) {
+  const wrapRect = els.comparePlots.parentElement.getBoundingClientRect();
+  const startLabel = formatCompareStatusTime(hit.segment.start);
+  const endLabel = formatCompareStatusTime(hit.segment.end);
+  const valueLabel = hit.lane.id === "controlMode" ? "Mode" : "Decoded state";
+  els.compareTooltip.innerHTML = `
+    <strong>${escapeHtml(hit.lane.label)}</strong>
+    <span>${escapeHtml(hit.row.device.name)}</span>
+    <span>${escapeHtml(`${startLabel} to ${endLabel}`)}</span>
+    <span>${escapeHtml(`${valueLabel}: ${hit.segment.label}`)}</span>
+    <span>${escapeHtml(`Raw: ${hit.segment.value}`)}</span>
+  `;
+  const localLeft = canvasRect.left - wrapRect.left + Math.min(hit.x2 - 10, Math.max(hit.x1 + 12, (hit.x1 + hit.x2) / 2));
+  const localTop = canvasRect.top - wrapRect.top + hit.y1 - 72;
+  const tooltipWidth = 280;
+  els.compareTooltip.style.left = `${Math.min(wrapRect.width - tooltipWidth - 10, Math.max(10, localLeft))}px`;
+  els.compareTooltip.style.top = `${Math.max(10, localTop)}px`;
+  els.compareTooltip.style.display = "block";
+}
+
+function formatCompareStatusTime(value) {
+  return state.compare.alignment === "relative" ? formatDuration(value / 1000) : formatFullX(value);
+}
+
+function hideCompareTooltip() {
+  els.compareTooltip.style.display = "none";
 }
 
 function renderOperations() {
