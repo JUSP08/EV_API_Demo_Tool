@@ -33,7 +33,8 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -98,6 +99,10 @@ p {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.toolbar.left {
+  justify-content: start;
 }
 
 .tabbar {
@@ -291,6 +296,60 @@ select {
   padding: 8px;
 }
 
+input[type="text"],
+input[type="password"],
+input[type="search"],
+textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.trend-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  align-items: start;
+  gap: 14px;
+}
+
+.plot-stack {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.plot-picker {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 120px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.selected-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.picker-actions {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .column-list {
   display: grid;
   gap: 8px;
@@ -301,15 +360,22 @@ select {
 
 .column-list.plot-options {
   grid-template-columns: 1fr;
-  max-height: 260px;
+  max-height: none;
+  min-height: 0;
 }
 
 .column-group {
   display: grid;
-  gap: 7px;
+  gap: 6px;
+  border-top: 1px solid #edf1f2;
+  padding-top: 9px;
 }
 
 .column-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: #39494f;
   font-size: 12px;
   font-weight: 760;
@@ -318,10 +384,17 @@ select {
   padding-top: 2px;
 }
 
+.column-group-title span {
+  color: var(--muted);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .column-group-items {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 6px;
 }
 
 .column-row {
@@ -329,10 +402,20 @@ select {
   grid-template-columns: 18px 1fr;
   align-items: start;
   gap: 8px;
-  padding: 8px;
+  padding: 8px 9px;
   border: 1px solid #ecf0f1;
   border-radius: 6px;
   background: #fbfdfc;
+}
+
+.column-row:hover {
+  border-color: #cddbdd;
+  background: #f7fbfa;
+}
+
+.column-row.selected {
+  border-color: rgba(15, 123, 108, 0.5);
+  background: #eef8f5;
 }
 
 .column-row input {
@@ -350,6 +433,23 @@ select {
   color: var(--muted);
   font-size: 12px;
   margin-top: 3px;
+}
+
+.column-row .column-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.column-row .column-chip {
+  display: inline-block;
+  border-radius: 999px;
+  background: #eef2f3;
+  color: #52646c;
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .unit-select {
@@ -471,6 +571,26 @@ canvas {
   font-size: 12px;
 }
 
+.ai-grid {
+  grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1fr);
+}
+
+.payload-preview,
+.ai-result {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #edf1f2;
+  border-radius: 6px;
+  background: #f7faf9;
+  padding: 10px;
+  color: #253238;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .bit-summary,
 .enum-summary,
 .gap-summary,
@@ -572,8 +692,18 @@ canvas {
   }
 
   .tab-content-grid,
-  .control-strip {
+  .control-strip,
+  .trend-layout {
     grid-template-columns: 1fr;
+  }
+
+  .plot-picker {
+    position: static;
+    max-height: none;
+  }
+
+  .column-list.plot-options {
+    max-height: 420px;
   }
 }
 

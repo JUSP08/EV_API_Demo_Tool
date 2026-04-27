@@ -8,10 +8,51 @@ const OPERATION_COLORS = {
   network: "#276bb6",
   runtime: "#2d6f8f",
   config: "#0f7b6c",
+  control: "#50612c",
   boot: "#7258a8",
   system: "#60717a",
 };
 const GAP_THRESHOLD_SECONDS = 40;
+const CONTROL_MODE_COLUMN_INDEX = 17;
+const CONTROL_MODE_LABELS = new Map([
+  [0, "Position"],
+  [1, "Flow"],
+  [2, "Power"],
+  [99, "No Control"],
+]);
+const OPERATIONAL_KNOWLEDGE_BASE = [
+  {
+    source: "Belimo Energy Valve Application Guide",
+    focus: "Application and hydronic interpretation",
+    notes: [
+      "Energy Valve combines characterized valve, actuator, flow measurement, water temperature sensing, power calculation, and application logic.",
+      "Key troubleshooting context is hydronic behavior: oversupply, low delta T, coil saturation, insufficient authority, incorrect sizing, or control-mode mismatch can produce poor operation without a pure device fault.",
+      "Common applications include air handling units, heat exchangers, fan coils, chilled beams, radiant heating/cooling, and district energy interfaces.",
+      "Pressure-independent control and electronic optimization should be interpreted against the selected control mode and the commanded setpoint source.",
+    ],
+  },
+  {
+    source: "Differential Pressure Control with Belimo Energy Valve",
+    focus: "Differential-pressure mode",
+    notes: [
+      "Differential pressure control requires a suitable water differential pressure sensor and correct installation of pulse lines/sensor range.",
+      "The device can control differential pressure while still measuring flow and water temperatures, enabling correlation between pressure, flow, power, and energy.",
+      "Relevant diagnostics include differential-pressure sensor type/range, setpoint, flow limitation, minimum flow behavior, sensor drift compensation, and shut-off function.",
+      "When troubleshooting differential-pressure control, check whether flow falls below the minimum operating range and whether the behavior is start-up, limitation, sensor, or true hydronic demand.",
+    ],
+  },
+  {
+    source: "Belimo Energy Valve 4 Operating Manual",
+    focus: "Operation, configuration, communication, and troubleshooting",
+    notes: [
+      "Energy Valve 4 supports flow control, power control, differential pressure control, position control, and Delta T Manager options.",
+      "The built-in web server can expose overview, data, status, settings, version information, data logging, user administration, maintenance, and communication settings.",
+      "Communication settings can include BACnet/IP, BACnet MS/TP, Modbus TCP, Modbus RTU, MP-secondary, cloud, IP, date/time, and certificates.",
+      "Useful troubleshooting correlations include LED/power state, selected control mode, setpoint source, flow tolerance, feedback values, bus protocol changes, user/admin activity, and downloaded data logging.",
+      "The device can provide up to 13 months of downloadable data, so trend CSV context should be treated as the primary operational record when available.",
+    ],
+  },
+];
 const UNIT_OPTIONS = {
   K: [
     ["K", (v) => v],
@@ -64,6 +105,7 @@ const state = {
   selected: new Set(),
   units: new Map(),
   zoom: null,
+  plotSearch: "",
   hitPoints: [],
   hitStatusEvents: [],
   hitOperationEvents: [],
@@ -82,6 +124,9 @@ const els = {
   statusOverlayToggle: document.getElementById("statusOverlayToggle"),
   operationsOverlayToggle: document.getElementById("operationsOverlayToggle"),
   plotColumnList: document.getElementById("plotColumnList"),
+  plotColumnSearch: document.getElementById("plotColumnSearch"),
+  selectedPlotCount: document.getElementById("selectedPlotCount"),
+  recommendedPlotButton: document.getElementById("recommendedPlotButton"),
   clearPlotButton: document.getElementById("clearPlotButton"),
   tabButtons: document.querySelectorAll(".tab-button"),
   tabPanels: document.querySelectorAll(".tab-panel"),
@@ -104,6 +149,17 @@ const els = {
   securitySummary: document.getElementById("securitySummary"),
   deviceSummary: document.getElementById("deviceSummary"),
   snapshotSummary: document.getElementById("snapshotSummary"),
+  reliabilitySummary: document.getElementById("reliabilitySummary"),
+  troubleshootingSummary: document.getElementById("troubleshootingSummary"),
+  prioritySummary: document.getElementById("prioritySummary"),
+  openRouterKey: document.getElementById("openRouterKey"),
+  openRouterModel: document.getElementById("openRouterModel"),
+  aiQuestion: document.getElementById("aiQuestion"),
+  buildAiPayloadButton: document.getElementById("buildAiPayloadButton"),
+  runAiAnalysisButton: document.getElementById("runAiAnalysisButton"),
+  aiKnowledgeSummary: document.getElementById("aiKnowledgeSummary"),
+  aiPayloadPreview: document.getElementById("aiPayloadPreview"),
+  aiResult: document.getElementById("aiResult"),
 };
 
 const ctx = els.canvas.getContext("2d");
@@ -149,6 +205,24 @@ els.resetZoomButton.addEventListener("click", () => {
 
 els.statusOverlayToggle.addEventListener("change", drawPlot);
 els.operationsOverlayToggle.addEventListener("change", drawPlot);
+
+els.plotColumnSearch.addEventListener("input", () => {
+  state.plotSearch = els.plotColumnSearch.value.trim().toLowerCase();
+  renderColumnList();
+});
+
+els.recommendedPlotButton.addEventListener("click", () => {
+  state.selected = new Set(defaultSelectedColumns(state.columns));
+  renderColumnList();
+  drawPlot();
+  renderSeriesTable();
+});
+
+els.buildAiPayloadButton.addEventListener("click", () => {
+  renderAiPayloadPreview();
+});
+
+els.runAiAnalysisButton.addEventListener("click", runAiAnalysis);
 
 els.clearPlotButton.addEventListener("click", () => {
   state.selected.clear();
@@ -401,12 +475,14 @@ function resetDataset() {
   state.selected = new Set();
   state.units = new Map();
   state.zoom = null;
+  state.plotSearch = "";
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
   state.plotBounds = null;
   state.dragZoom = null;
   state.debug = emptyDebugState();
+  els.plotColumnSearch.value = "";
   els.subtitle.textContent = "Load datalog CSVs and debug/support logs to correlate trends with system operations.";
 }
 
@@ -575,10 +651,14 @@ function defaultSelectedColumns(columns) {
   const preferred = [
     "12: RelativePosition_%",
     "2303: AbsoluteWaterFlow_m3/sec",
+    "2304: AbsolutePower_W",
+    "4313: SetAbsoluteDifferentialWaterPressureSetpoint_Pa",
+    "4320: AbsoluteDifferentialWaterPressure_Pa",
+    "2001: RelativeSetpoint_%",
   ];
   const selected = preferred.filter((header) => columns.some((column) => column.header === header));
   if (selected.length) return selected;
-  return columns.filter((column) => column.kind === "numeric").slice(0, 3).map((column) => column.header);
+  return columns.filter(isPlottableColumn).slice(0, 3).map((column) => column.header);
 }
 
 function renderAll() {
@@ -588,6 +668,7 @@ function renderAll() {
   renderRuntime();
   renderSecurity();
   renderSnapshot();
+  renderAiKnowledgeSummary();
   renderColumnList();
   renderSeriesTable();
   renderBitSummary();
@@ -715,6 +796,33 @@ function renderSnapshot() {
   els.snapshotSummary.innerHTML = notable.length
     ? notable.map(([name, value]) => renderSummaryLine(name, String(value))).join("")
     : "No allDatapoints.json loaded yet.";
+
+  const reliability = buildReliabilitySummary();
+  els.reliabilitySummary.className = reliability.length ? "summary-list" : "summary-list muted";
+  els.reliabilitySummary.innerHTML = reliability.length
+    ? reliability.map((item) => renderFindingLine(item)).join("")
+    : "No allDatapoints.json loaded yet.";
+
+  const troubleshooting = buildTroubleshootingSummary();
+  els.troubleshootingSummary.className = troubleshooting.length ? "summary-list" : "summary-list muted";
+  els.troubleshootingSummary.innerHTML = troubleshooting.length
+    ? troubleshooting.map((item) => renderFindingLine(item)).join("")
+    : "No allDatapoints.json loaded yet.";
+
+  const priorities = buildPrioritizedFindings();
+  els.prioritySummary.className = priorities.length ? "summary-list" : "summary-list muted";
+  els.prioritySummary.innerHTML = priorities.length
+    ? priorities.map((item) => renderFindingLine(item)).join("")
+    : "No allDatapoints.json loaded yet.";
+}
+
+function renderAiKnowledgeSummary() {
+  els.aiKnowledgeSummary.innerHTML = OPERATIONAL_KNOWLEDGE_BASE.map((entry) => `
+    <div class="status-line">
+      <strong>${escapeHtml(entry.source)}</strong>
+      <span>${escapeHtml(entry.focus)} - ${entry.notes.length} summarized guidance points included in AI payload.</span>
+    </div>
+  `).join("");
 }
 
 function buildInsights() {
@@ -765,6 +873,342 @@ function noteworthyDatapoints() {
     .slice(0, 80);
 }
 
+function buildReliabilitySummary() {
+  const dp = state.debug.datapoints;
+  if (!dp) return [];
+  const items = [];
+  const add = (title, detail, severity = "system") => items.push({ title, detail, severity });
+  const powerUps = numberFromDatapoint("OcPowerUpCounter");
+  const uptime = numberFromDatapoint("OcUptime");
+  const watchdogReboots = numberFromDatapoint("OcWatchdogRebootCounter");
+  const watchdogFile = state.debug.watchdogCounter;
+  const busTriggers = [
+    ["Bus", "BusWatchdogTriggered"],
+    ["BACnet/IP", "BacnetIpBusWatchdogTriggered"],
+    ["BACnet MS/TP", "BacnetMstpBusWatchdogTriggered"],
+    ["Modbus RTU", "ModbusRtuBusWatchdogTriggered"],
+    ["Modbus TCP", "ModbusTcpBusWatchdogTriggered"],
+    ["MP slave", "MpSlaveBusWatchdogTriggered"],
+  ].map(([label, key]) => ({ label, key, value: numberFromDatapoint(key) })).filter((item) => Number.isFinite(item.value));
+
+  if (Number.isFinite(powerUps)) add("Power-up counter", `${powerUps.toLocaleString()} recorded power-ups`, powerUps > 1 ? "update" : "system");
+  if (Number.isFinite(uptime)) add("OC uptime", formatDuration(uptime), uptime < 3600 && powerUps > 1 ? "update" : "system");
+  add("Active boot slot", stringFromDatapoint("OcActiveBootSlot") || state.debug.bootSlot?.["bootjournal.lastboot.slot"] || "n/a");
+  add("Last successful boot slot", state.debug.bootSlot?.["bootjournal.lastsuccessfulboot.slot"] || "n/a");
+  add("Power supply status", stringFromDatapoint("PowerSupplyStatus") || "n/a");
+  add("Watchdog support", stringFromDatapoint("WatchdogSupported") || "n/a");
+  if (Number.isFinite(watchdogReboots)) add("OC watchdog reboot counter", watchdogReboots.toLocaleString(), watchdogReboots ? "error" : "system");
+  add("Last reboot by watchdog", stringFromDatapoint("OcLastRebootByWatchdog") || "n/a", stringFromDatapoint("OcLastRebootByWatchdog") === "true" ? "error" : "system");
+  add("Last watchdog cause", stringFromDatapoint("OcLastWatchdogCause") || "None reported");
+  if (watchdogFile !== null) add("watchdog.counter file", String(watchdogFile), watchdogFile ? "error" : "system");
+  add("Watchdog timeouts", [
+    `BACnet ${stringFromDatapoint("SetBacnetWatchdogTimeout") || "n/a"}s`,
+    `Modbus ${stringFromDatapoint("SetModbusWatchdogTimeout") || "n/a"}s`,
+    `MP ${stringFromDatapoint("SetMpSlaveWatchdogTimeout") || "n/a"}s`,
+    `Any comm ${stringFromDatapoint("anyCommunicationWatchdogTimeout") || "n/a"}s`,
+  ].join(", "));
+  busTriggers.forEach((item) => {
+    add(`${item.label} watchdog triggers`, item.value.toLocaleString(), item.value > 0 ? "error" : "system");
+  });
+  return items;
+}
+
+function buildTroubleshootingSummary() {
+  const dp = state.debug.datapoints;
+  if (!dp) return [];
+  const items = [];
+  const importantKeys = [
+    "collective_error",
+    "sensor_any_error_sl",
+    "flow_sensor_not_ok",
+    "flow_measurement_error_sl",
+    "power_not_ok",
+    "power_ok",
+    "CollectiveMasterDeviceErrorStatus",
+    "MasterDeviceErrorStatus",
+    "MasterDeviceErrorStatusExtended",
+    "CollectiveWaterFlowSensorDeviceErrorStatus",
+    "NonPersistentWaterFlowSensorDeviceErrorStatus",
+    "PersistentWaterFlowSensorDeviceErrorStatus",
+    "OcErrorCounter",
+    "OcWarnCounter",
+    "CummulatedErrorCounter-TotalOccurences",
+    "OcThreadCounter",
+    "AliveCounter",
+    "log-AliveCounter",
+    "OcFlashWriteThresholdExceededCounter",
+    "NfcEepromWriteThresholdExceededCounter",
+    "statistics",
+  ];
+  importantKeys.forEach((key) => {
+    const value = stringFromDatapoint(key);
+    if (value !== "") items.push({ title: key, detail: value, severity: severityForDatapoint(key, value) });
+  });
+
+  const counters = Object.entries(dp)
+    .filter(([key, value]) => /(?:ErrOccurance|Occur(?:a|e)nces|-hrs|-days)$/i.test(key) && isMeaningfulDatapointValue(value))
+    .map(([key, value]) => ({ title: key, detail: String(value), severity: severityForDatapoint(key, value) }));
+  return [...items, ...counters].slice(0, 120);
+}
+
+function buildPrioritizedFindings() {
+  if (!state.debug.datapoints) return [];
+  const findings = [];
+  const add = (title, detail, severity = "system") => findings.push({ title, detail, severity });
+  const powerUps = numberFromDatapoint("OcPowerUpCounter");
+  const uptime = numberFromDatapoint("OcUptime");
+  const watchdogReboots = numberFromDatapoint("OcWatchdogRebootCounter");
+  const bacnetWatchdog = numberFromDatapoint("BacnetIpBusWatchdogTriggered");
+  const networkRecoveries = state.debug.events.filter((event) => event.category === "network").length;
+  const updateErrors = state.debug.events.filter((event) => event.category === "update" && event.severity === "Error").length;
+
+  if (Number.isFinite(powerUps) && powerUps > 1 && Number.isFinite(uptime) && uptime < 3600) {
+    add("Recent reboot after multiple power-ups", `Power-up counter is ${powerUps}, while uptime is only ${formatDuration(uptime)}. This suggests the export was taken soon after a restart/power cycle.`, "update");
+  }
+  if (watchdogReboots === 0 && stringFromDatapoint("OcLastRebootByWatchdog") === "false" && state.debug.watchdogCounter === 0) {
+    add("No OC watchdog reboot evidence", "OC watchdog reboot counter, last-watchdog flag, and watchdog.counter file are all zero/false in this bundle.", "system");
+  } else if ((watchdogReboots || 0) > 0 || state.debug.watchdogCounter > 0) {
+    add("Watchdog reboot evidence found", `OC watchdog reboots: ${watchdogReboots}; watchdog.counter: ${state.debug.watchdogCounter}.`, "error");
+  }
+  if ((bacnetWatchdog || 0) > 0) {
+    add("BACnet/IP bus watchdog triggered", `${bacnetWatchdog} BACnet/IP bus watchdog trigger(s) are reported even though OC watchdog reboots are not. Check bus supervision separately from system resets.`, "error");
+  }
+  if (networkRecoveries) {
+    add("Network recovery loop in event log", `${networkRecoveries} network interface recovery events were parsed. Correlate these with bus watchdog triggers and communication gaps.`, "error");
+  }
+  if (stringFromDatapoint("collective_error") === "true") {
+    add("Collective error active", `Master status ${stringFromDatapoint("MasterDeviceErrorStatus")} / extended ${stringFromDatapoint("MasterDeviceErrorStatusExtended")} with collective_error=true.`, "error");
+  }
+  if (stringFromDatapoint("flow_sensor_not_ok") === "true" || stringFromDatapoint("flow_measurement_error_sl") === "true") {
+    add("Flow sensor / measurement fault path", `flow_sensor_not_ok=${stringFromDatapoint("flow_sensor_not_ok")}, flow_measurement_error_sl=${stringFromDatapoint("flow_measurement_error_sl")}, FlowMeasureError occurrences=${stringFromDatapoint("FlowMeasureError-ErrOccurance") || "0"}.`, "error");
+  }
+  if (numberFromDatapoint("NoComm2Actuator-ErrOccurance") > 0 || numberFromDatapoint("NoComm2Actuator-hrs") > 0) {
+    add("Actuator communication issue recorded", `NoComm2Actuator occurrence=${stringFromDatapoint("NoComm2Actuator-ErrOccurance") || "0"}, hours=${stringFromDatapoint("NoComm2Actuator-hrs") || "0"}.`, "error");
+  }
+  if (stringFromDatapoint("power_not_ok") === "true") {
+    add("Power status not OK", `power_not_ok=true while PowerControlStatus=${stringFromDatapoint("PowerControlStatus") || "n/a"} and RelativePower=${stringFromDatapoint("RelativePower") || "n/a"}.`, "update");
+  }
+  if (updateErrors) {
+    add("Update failures exist in event log", `${updateErrors} update-related error events are available in the Operations tab.`, "update");
+  }
+  return findings;
+}
+
+function renderFindingLine(item) {
+  return `
+    <div class="status-line">
+      <strong><span class="badge ${escapeAttr(item.severity || "system")}">${escapeHtml(item.severity || "system")}</span> ${escapeHtml(item.title)}</strong>
+      <span>${escapeHtml(item.detail)}</span>
+    </div>
+  `;
+}
+
+function stringFromDatapoint(key) {
+  const value = state.debug.datapoints?.[key];
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function numberFromDatapoint(key) {
+  const value = Number(stringFromDatapoint(key));
+  return Number.isFinite(value) ? value : NaN;
+}
+
+function isMeaningfulDatapointValue(value) {
+  const text = String(value);
+  if (/^-?12345(?:\.0)?$/.test(text)) return false;
+  if (/^(false|0|0\.0|null|)$/i.test(text)) return false;
+  return true;
+}
+
+function severityForDatapoint(key, value) {
+  const text = String(value).toLowerCase();
+  if (/watchdog|error|err|not_ok|not_reached|fault|collective|comm|sensor/i.test(key) && isMeaningfulDatapointValue(value)) return "error";
+  if (/warn|powerup|boot|uptime|power/i.test(key) && isMeaningfulDatapointValue(value)) return "update";
+  if (text === "true" && /enabled|security|privileged|ssh|ipkg/i.test(key)) return "security";
+  return "system";
+}
+
+function buildAiPayload() {
+  const eventCounts = countBy(state.debug.events, (event) => event.category);
+  const sourceCounts = countBy(state.debug.configChanges, (change) => change.source);
+
+  return {
+    schema: "dashboard-plus-ai-insights-v2",
+    question: els.aiQuestion.value.trim(),
+    analysisWorkflow: [
+      "1. Treat trend CSV data as the primary operational timeline when present: check selected series statistics, gaps, status bit transitions, and trend/event alignment.",
+      "2. Correlate event.log entries and jvm_agent.log runtime markers against the trend time axis: network recovery, update attempts, configuration changes, security state, JVM starts, and GC/load outliers.",
+      "3. Use allDatapoints.json only after the timeline correlation as a current-state/export snapshot: power-up count, watchdog evidence, active flags, counters, and configuration state.",
+      "4. Compare findings against the embedded Belimo Energy Valve operational knowledge base and separate device faults from hydronic/application behavior.",
+      "5. Return prioritized insights with evidence, uncertainty, and next tests.",
+    ],
+    operationalKnowledgeBase: OPERATIONAL_KNOWLEDGE_BASE,
+    trendFirstContext: buildTrendContextForAi(),
+    eventAndRuntimeContext: {
+      files: state.debug.files.filter((name) => /event\.log|jvm_agent/i.test(name)),
+      eventCounts,
+      topConfigSources: topEntries(sourceCounts, 10),
+      networkRecoveryEvents: state.debug.events.filter((event) => event.category === "network").slice(-40).map(compactEvent),
+      updateEvents: state.debug.events.filter((event) => event.category === "update").slice(-40).map(compactEvent),
+      securityEvents: state.debug.events.filter((event) => event.category === "security").slice(-30).map(compactEvent),
+      latestEvents: state.debug.events.slice(-60).map(compactEvent),
+      jvm: summarizeJvmForPayload(),
+    },
+    snapshotContext: buildSnapshotContextForAi(),
+  };
+}
+
+function buildTrendContextForAi() {
+  const series = selectedSeries().map((item) => {
+    const stats = summarize(item.points.map((point) => point.y));
+    return {
+      signal: item.column.label,
+      unit: item.unit,
+      min: formatForPayload(stats.min),
+      max: formatForPayload(stats.max),
+      mean: formatForPayload(stats.mean),
+      first: formatForPayload(item.points[0]?.y),
+      last: formatForPayload(item.points[item.points.length - 1]?.y),
+      points: item.points.length,
+      timeStart: item.points[0] ? formatFullX(item.points[0].x) : "",
+      timeEnd: item.points[item.points.length - 1] ? formatFullX(item.points[item.points.length - 1].x) : "",
+    };
+  });
+
+  return {
+    files: state.files,
+    rows: state.rows.length,
+    columns: state.headers.length,
+    selectedSeries: series,
+    timestampGaps: getTimestampGaps().slice(0, 20).map((gap) => ({
+      start: formatFullX(gap.start),
+      end: formatFullX(gap.end),
+      seconds: formatForPayload(gap.seconds),
+    })),
+    controlMode: {
+      sourceColumn: getControlModeHeader(),
+      legend: Object.fromEntries([...CONTROL_MODE_LABELS.entries()]),
+      transitions: getControlModeEventsFromCsv().slice(0, 80).map((event) => ({
+        time: formatFullX(event.time),
+        value: event.modeValue,
+        label: event.modeLabel,
+      })),
+    },
+    statusEvents: getStatusEvents().slice(0, 60).map((event) => ({
+      time: formatFullX(event.time),
+      added: event.added,
+      cleared: event.cleared,
+      mask: event.mask,
+    })),
+  };
+}
+
+function buildSnapshotContextForAi() {
+  return {
+    device: {
+      serial: state.debug.deviceInfo?.hardware?.["Serial number"] ?? "",
+      platform: state.debug.deviceInfo?.hardware?.Platform ?? "",
+      csp: state.debug.deviceInfo?.software?.["Csp Version"] ?? "",
+      bsp: state.debug.deviceInfo?.software?.["Bsp version"] ?? "",
+      activeBootSlot: state.debug.deviceInfo?.software?.["Active Boot Slot"] ?? stringFromDatapoint("OcActiveBootSlot"),
+      dataprofile: state.debug.deviceInfo?.deviceDataprofileStatus ?? null,
+      exportTime: state.debug.deviceInfo?.dateAndTime ?? "",
+    },
+    powerBootWatchdog: buildReliabilitySummary(),
+    prioritizedFindings: buildPrioritizedFindings(),
+    troubleshootingCounters: buildTroubleshootingSummary().slice(0, 100),
+    notableDatapoints: noteworthyDatapoints().slice(0, 80).map(([name, value]) => ({ name, value })),
+  };
+}
+
+function renderAiPayloadPreview() {
+  const payload = buildAiPayload();
+  els.aiPayloadPreview.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function runAiAnalysis() {
+  const apiKey = els.openRouterKey.value.trim();
+  if (!apiKey) {
+    els.aiResult.className = "ai-result";
+    els.aiResult.textContent = "Enter an OpenRouter API key before running analysis.";
+    return;
+  }
+  const payload = buildAiPayload();
+  els.aiPayloadPreview.textContent = JSON.stringify(payload, null, 2);
+  els.aiResult.className = "ai-result";
+  els.aiResult.textContent = "Analyzing with OpenRouter...";
+  els.runAiAnalysisButton.disabled = true;
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Dashboard Plus",
+      },
+      body: JSON.stringify({
+        model: els.openRouterModel.value.trim() || "openai/gpt-4o-mini",
+        temperature: 0.2,
+        max_tokens: 1600,
+        messages: [
+          {
+            role: "system",
+            content: "You are a senior embedded device support engineer for Belimo Energy Valve troubleshooting. Follow the provided analysisWorkflow exactly: trend CSV operation first, event.log and jvm_agent correlation second, allDatapoints snapshot third, then operational knowledge-base comparison. Be evidence-driven, mention uncertainty, separate hydronic/application behavior from device faults, and prioritize likely root causes and next tests.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify(payload),
+          },
+        ],
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result?.error?.message || `OpenRouter returned HTTP ${response.status}`);
+    }
+    els.aiResult.textContent = result.choices?.[0]?.message?.content || "No model content returned.";
+  } catch (error) {
+    els.aiResult.textContent = `AI analysis failed: ${error.message}`;
+  } finally {
+    els.runAiAnalysisButton.disabled = false;
+  }
+}
+
+function compactEvent(event) {
+  return {
+    time: formatFullX(event.time),
+    severity: event.severity,
+    component: event.component,
+    category: event.category,
+    message: shorten(event.message, 220),
+  };
+}
+
+function summarizeJvmForPayload() {
+  const gcs = state.debug.jvmEvents.filter((event) => event.type === "gc");
+  const starts = state.debug.jvmEvents.filter((event) => event.type === "start");
+  return {
+    starts: starts.length,
+    versions: countBy(starts, (event) => event.version),
+    fullGcEvents: gcs.length,
+    maxGcMillis: Math.max(...gcs.map((event) => event.gcMillis), 0),
+    maxLoadMillis: Math.max(...gcs.map((event) => event.loadMillis), 0),
+    topLoadEvents: [...gcs].sort((a, b) => b.loadMillis - a.loadMillis).slice(0, 8).map((event) => ({
+      time: formatFullX(event.time),
+      gcMillis: event.gcMillis,
+      loadMillis: event.loadMillis,
+      windowSeconds: event.windowSeconds,
+    })),
+  };
+}
+
+function formatForPayload(value) {
+  if (!Number.isFinite(value)) return null;
+  return Number(value.toPrecision(6));
+}
+
 function renderEventLine(event) {
   return `
     <div class="event-line">
@@ -780,19 +1224,20 @@ function renderSummaryLine(title, detail) {
 }
 
 function renderColumnList() {
-  const candidates = state.columns.filter((column) => ["numeric", "state"].includes(column.kind));
+  const candidates = state.columns.filter(isPlottableColumn).filter(matchesPlotSearch);
   const groups = groupPlotColumns(candidates);
+  els.selectedPlotCount.textContent = `${state.selected.size.toLocaleString()} selected`;
   els.plotColumnList.innerHTML = groups.map((group) => {
     if (!group.columns.length) return "";
     return `
       <section class="column-group">
-        <div class="column-group-title">${escapeHtml(group.label)}</div>
+        <div class="column-group-title">${escapeHtml(group.label)} <span>${group.columns.length.toLocaleString()}</span></div>
         <div class="column-group-items">
           ${group.columns.map((column) => renderColumnOption(column)).join("")}
         </div>
       </section>
     `;
-  }).join("");
+  }).join("") || `<div class="muted">No matching signals.</div>`;
 
   els.plotColumnList.querySelectorAll("input[type='checkbox']").forEach((input) => {
     input.addEventListener("change", () => {
@@ -816,15 +1261,32 @@ function renderColumnOption(column) {
     const checked = state.selected.has(column.header) ? "checked" : "";
     const unitSelect = renderUnitSelect(column);
     return `
-      <label class="column-row">
+      <label class="column-row ${checked ? "selected" : ""}">
         <input type="checkbox" data-column="${escapeAttr(column.header)}" ${checked} />
         <span>
           <strong>${escapeHtml(column.label)}</strong>
-          <span>${escapeHtml(column.registerId ? `Register ${column.registerId} - ${column.kind}` : column.kind)}</span>
+          <span class="column-meta">
+            ${column.registerId ? `<span class="column-chip">Reg ${escapeHtml(column.registerId)}</span>` : ""}
+            <span class="column-chip">${escapeHtml(column.kind)}</span>
+            ${column.unit ? `<span class="column-chip">${escapeHtml(column.unit)}</span>` : ""}
+          </span>
           ${unitSelect}
         </span>
       </label>
     `;
+}
+
+function isPlottableColumn(column) {
+  if (!["numeric", "state"].includes(column.kind)) return false;
+  if (column.header === getControlModeHeader()) return false;
+  const text = `${column.header} ${column.label}`.toLowerCase();
+  return !/objectname|visible|button|override|password|certificate|audience|token|hash|serial/.test(text);
+}
+
+function matchesPlotSearch(column) {
+  if (!state.plotSearch) return true;
+  const haystack = `${column.header} ${column.label} ${column.registerId} ${column.unit} ${column.kind}`.toLowerCase();
+  return state.plotSearch.split(/\s+/).every((term) => haystack.includes(term));
 }
 
 function groupPlotColumns(columns) {
@@ -832,34 +1294,41 @@ function groupPlotColumns(columns) {
     "12: RelativePosition_%",
     "2303: AbsoluteWaterFlow_m3/sec",
     "2001: RelativeSetpoint_%",
+    "2304: AbsolutePower_W",
     "4320: AbsoluteDifferentialWaterPressure_Pa",
     "4313: SetAbsoluteDifferentialWaterPressureSetpoint_Pa",
   ]);
   const groups = [
-    { id: "common", label: "Common Trends", columns: [] },
-    { id: "flow", label: "Flow, Position, Power", columns: [] },
-    { id: "temperature", label: "Temperature & Energy", columns: [] },
-    { id: "pressure", label: "Differential Pressure", columns: [] },
-    { id: "control", label: "Setpoints & Control State", columns: [] },
+    { id: "recommended", label: "Recommended", columns: [] },
+    { id: "hydronic", label: "Flow & Valve", columns: [] },
+    { id: "power", label: "Power & Energy", columns: [] },
+    { id: "temperature", label: "Temperature & Delta T", columns: [] },
+    { id: "pressure", label: "Pressure", columns: [] },
+    { id: "control", label: "Setpoints & Control", columns: [] },
+    { id: "diagnostics", label: "Diagnostics", columns: [] },
     { id: "other", label: "Other Signals", columns: [] },
   ];
   const byId = Object.fromEntries(groups.map((group) => [group.id, group]));
 
   columns.forEach((column) => {
     if (selectedHeaders.has(column.header)) {
-      byId.common.columns.push(column);
+      byId.recommended.columns.push(column);
       return;
     }
 
     const text = `${column.header} ${column.label}`.toLowerCase();
-    if (/flow|position|power/.test(text) && !/setpoint|maximum/.test(text)) {
-      byId.flow.columns.push(column);
-    } else if (/temperature|deltat|energy|glycol|volume/.test(text)) {
-      byId.temperature.columns.push(column);
+    if (/error|fault|alarm|warning|watchdog|comm|not ok|not reached|status|counter/.test(text)) {
+      byId.diagnostics.columns.push(column);
+    } else if (/setpoint|control|maximum|minimum|forced|source|mode|range|analog|feedback/.test(text) || column.kind === "state") {
+      byId.control.columns.push(column);
     } else if (/pressure|dp\b|differential/.test(text)) {
       byId.pressure.columns.push(column);
-    } else if (/setpoint|control|maximum|forced|reached|value|code|offset|analog/.test(text) || column.kind === "state") {
-      byId.control.columns.push(column);
+    } else if (/temperature|delta\s*t|deltat|\bdt\b|glycol|freeze/.test(text)) {
+      byId.temperature.columns.push(column);
+    } else if (/power|energy|load/.test(text)) {
+      byId.power.columns.push(column);
+    } else if (/flow|position|volume|actuator|valve/.test(text)) {
+      byId.hydronic.columns.push(column);
     } else {
       byId.other.columns.push(column);
     }
@@ -868,7 +1337,7 @@ function groupPlotColumns(columns) {
   groups.forEach((group) => {
     group.columns.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
   });
-  byId.common.columns.sort((a, b) => [...selectedHeaders].indexOf(a.header) - [...selectedHeaders].indexOf(b.header));
+  byId.recommended.columns.sort((a, b) => [...selectedHeaders].indexOf(a.header) - [...selectedHeaders].indexOf(b.header));
   return groups.filter((group) => group.columns.length);
 }
 
@@ -1303,8 +1772,11 @@ function nearestOperationEvent(mouseX, mouseY) {
 }
 
 function showStatusTooltip(hit, rect) {
+  const title = hit.lane.id === "controlMode"
+    ? `Control mode: ${hit.segment.label} (${hit.segment.value})`
+    : `Bit ${hit.lane.bit}: ${hit.lane.label}`;
   els.plotTooltip.innerHTML = `
-    <strong>Bit ${hit.lane.bit}: ${escapeHtml(hit.lane.label)}</strong>
+    <strong>${escapeHtml(title)}</strong>
     <span>${escapeHtml(formatFullX(hit.segment.start))} to ${escapeHtml(formatFullX(hit.segment.end))}</span>
     <span>Active for ${escapeHtml(formatDuration((hit.segment.end - hit.segment.start) / 1000))}</span>
   `;
@@ -1401,16 +1873,76 @@ function getOperationLanes() {
     .filter((lane) => lane.events.length);
 }
 
+function getControlModeEvents() {
+  const events = getControlModeEventsFromCsv();
+  const configEvents = getControlModeEventsFromConfig();
+  return [...events, ...configEvents].sort((a, b) => a.time - b.time);
+}
+
+function getControlModeEventsFromCsv() {
+  const events = [];
+  let previous = null;
+  getControlModeSamplesFromCsv().forEach((sample, index) => {
+    if (index > 0 && sample.value === previous) return;
+    const label = sample.label;
+    const value = sample.value;
+    const time = sample.time;
+    if (index > 0 && value === previous) return;
+    events.push({
+      time,
+      severity: "System",
+      component: "CSV control mode",
+      category: "control",
+      modeValue: value,
+      modeLabel: label,
+      message: `Control mode ${label} (${value}) from CSV column R`,
+    });
+    previous = value;
+  });
+  return events;
+}
+
+function getControlModeEventsFromConfig() {
+  return state.debug.configChanges
+    .filter((change) => /SelectWaterControlMode/i.test(change.path))
+    .map((change) => {
+      const value = Number(change.value);
+      const label = controlModeLabel(value);
+      return {
+        time: change.time,
+        severity: "System",
+        component: "Config control mode",
+        category: "control",
+        modeValue: value,
+        modeLabel: label,
+        message: `Control mode changed to ${label} (${change.value}) by ${change.source}`,
+        source: change.source,
+      };
+    });
+}
+
+function getControlModeHeader() {
+  if (!state.headers.length) return "";
+  return state.headers.find((header) => /control.?mode|SelectWaterControlMode|WaterControlMode/i.test(header))
+    || state.headers[CONTROL_MODE_COLUMN_INDEX]
+    || "";
+}
+
+function controlModeLabel(value) {
+  return CONTROL_MODE_LABELS.get(Number(value)) ?? `Unknown ${value}`;
+}
+
 function getStatusLanes() {
+  const controlLane = getControlModeLane();
   const bitfield = state.columns.find((column) => column.kind === "bitfield");
-  if (!bitfield) return [];
+  if (!bitfield) return controlLane ? [controlLane] : [];
 
   const samples = state.rows.map((row) => ({
     time: parseTimestamp(row["Timestamp - UTC"]),
     mask: Number(row[bitfield.header]),
   })).filter((sample) => Number.isFinite(sample.time) && Number.isFinite(sample.mask));
 
-  return bitfield.bitMap.map((bit) => {
+  const bitLanes = bitfield.bitMap.map((bit) => {
     const segments = [];
     let activeStart = null;
 
@@ -1430,6 +1962,49 @@ function getStatusLanes() {
 
     return { bit: bit.bit, label: bit.label, segments };
   }).filter((lane) => lane.segments.length);
+  return controlLane ? [controlLane, ...bitLanes] : bitLanes;
+}
+
+function getControlModeLane() {
+  const samples = getControlModeSamplesFromCsv();
+  if (!samples.length) return null;
+
+  const segments = [];
+  let active = null;
+  samples.forEach((sample, index) => {
+    const next = samples[index + 1];
+    if (!active || active.value !== sample.value) {
+      if (active && sample.time > active.start) {
+        segments.push({
+          start: active.start,
+          end: sample.time,
+          value: active.value,
+          label: active.label,
+        });
+      }
+      active = { start: sample.time, value: sample.value, label: sample.label };
+    }
+    if (!next && active) {
+      const end = sample.time > active.start ? sample.time : active.start + 1;
+      segments.push({ start: active.start, end, value: active.value, label: active.label });
+    }
+  });
+
+  return segments.length ? { id: "controlMode", bit: "CM", label: "Control mode", segments } : null;
+}
+
+function getControlModeSamplesFromCsv() {
+  const header = getControlModeHeader();
+  if (!header) return [];
+  return state.rows.map((row) => {
+    const time = parseTimestamp(row["Timestamp - UTC"]);
+    const value = Number(row[header]);
+    return {
+      time,
+      value,
+      label: controlModeLabel(value),
+    };
+  }).filter((sample) => Number.isFinite(sample.time) && Number.isFinite(sample.value));
 }
 
 function getStatusEvents() {
@@ -1478,7 +2053,7 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
   ctx.save();
   ctx.font = "11px Inter, system-ui, sans-serif";
   ctx.fillStyle = "#53656d";
-  ctx.fillText("Status active intervals", margin.left, top - 12);
+  ctx.fillText("Status and control state intervals", margin.left, top - 12);
 
   lanes.forEach((lane, laneIndex) => {
     const y = top + laneIndex * (laneHeight + laneGap);
@@ -1488,7 +2063,7 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
 
     ctx.fillStyle = "#39494f";
     ctx.textAlign = "right";
-    ctx.fillText(`B${lane.bit}`, margin.left - 8, y + 13);
+    ctx.fillText(typeof lane.bit === "number" ? `B${lane.bit}` : lane.bit, margin.left - 8, y + 13);
     ctx.textAlign = "left";
 
     lane.segments
@@ -1502,6 +2077,12 @@ function drawStatusTimeline(lanes, margin, width, height, xExtent) {
         ctx.globalAlpha = 0.82;
         ctx.fillRect(x1, y + 3, Math.max(3, x2 - x1), laneHeight - 6);
         ctx.globalAlpha = 1;
+        if (lane.id === "controlMode") {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+          ctx.fillRect(x1 + 3, y + 4, Math.min(Math.max(0, x2 - x1 - 6), 86), laneHeight - 8);
+          ctx.fillStyle = "#253238";
+          ctx.fillText(shorten(segment.label, 14), x1 + 7, y + 13);
+        }
         state.hitStatusEvents.push({ x1, x2: Math.max(x2, x1 + 3), y1: y + 2, y2: y + laneHeight - 2, lane, segment });
       });
 
@@ -1549,6 +2130,10 @@ function drawOperationTimeline(lanes, margin, width, height, xExtent, statusLane
         ctx.arc(x, y + laneHeight / 2, event.severity === "Error" ? 4.8 : 3.8, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
+        if (lane.id === "control") {
+          ctx.fillStyle = "#253238";
+          ctx.fillText(shorten(event.modeLabel ?? "", 14), x + 6, y + 14);
+        }
         state.hitOperationEvents.push({ x1: x - 7, x2: x + 7, y1: y + 2, y2: y + laneHeight - 2, lane, event });
       });
   });

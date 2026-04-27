@@ -40,6 +40,7 @@
           <button class="tab-button" data-tab="runtime" type="button">Runtime</button>
           <button class="tab-button" data-tab="security" type="button">Security</button>
           <button class="tab-button" data-tab="snapshot" type="button">Snapshot</button>
+          <button class="tab-button" data-tab="ai" type="button">AI Insights</button>
           <button class="tab-button" data-tab="series" type="button">Series</button>
           <button class="tab-button" data-tab="dataset" type="button">Dataset</button>
           <button class="tab-button" data-tab="status" type="button">Status</button>
@@ -48,33 +49,44 @@
         </nav>
 
         <section class="tab-panel active" data-panel="trend">
-          <section class="panel control-strip">
-            <label class="check-field">
-              <input id="statusOverlayToggle" type="checkbox" checked />
-              <span>Show status timeline</span>
-            </label>
-            <label class="check-field">
-              <input id="operationsOverlayToggle" type="checkbox" checked />
-              <span>Show operations overlay</span>
-            </label>
-          </section>
+          <div class="trend-layout">
+            <div class="plot-stack">
+              <section class="panel control-strip">
+                <label class="check-field">
+                  <input id="statusOverlayToggle" type="checkbox" checked />
+                  <span>Status timeline</span>
+                </label>
+                <label class="check-field">
+                  <input id="operationsOverlayToggle" type="checkbox" checked />
+                  <span>Operations overlay</span>
+                </label>
+              </section>
 
-          <section class="plot-area">
-            <canvas id="plotCanvas" width="1200" height="520"></canvas>
-            <div class="plot-tooltip" id="plotTooltip"></div>
-            <div class="empty-state" id="emptyState">
-              <strong>No data loaded</strong>
-              <span>Drop the datalog CSV to start plotting.</span>
+              <section class="plot-area">
+                <canvas id="plotCanvas" width="1200" height="520"></canvas>
+                <div class="plot-tooltip" id="plotTooltip"></div>
+                <div class="empty-state" id="emptyState">
+                  <strong>No data loaded</strong>
+                  <span>Drop the datalog CSV to start plotting.</span>
+                </div>
+              </section>
             </div>
-          </section>
 
-          <section class="panel">
-            <div class="panel-title row-title">
-              <span>Plot Columns</span>
-              <button class="small-button" id="clearPlotButton" type="button">Clear</button>
-            </div>
-            <div class="column-list plot-options" id="plotColumnList"></div>
-          </section>
+            <section class="panel plot-picker">
+              <div class="panel-title row-title">
+                <span>Signals</span>
+                <span class="selected-count" id="selectedPlotCount">0 selected</span>
+              </div>
+              <div class="picker-actions">
+                <input id="plotColumnSearch" type="search" placeholder="Search signals" autocomplete="off" />
+                <div class="toolbar left">
+                  <button class="small-button" id="recommendedPlotButton" type="button">Recommended</button>
+                  <button class="small-button" id="clearPlotButton" type="button">Clear</button>
+                </div>
+              </div>
+              <div class="column-list plot-options" id="plotColumnList"></div>
+            </section>
+          </div>
         </section>
 
         <section class="tab-panel" data-panel="operations">
@@ -144,6 +156,56 @@
               <div id="snapshotSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
             </section>
           </div>
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Power / Boot / Watchdog</div>
+              <div id="reliabilitySummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Troubleshooting Counters</div>
+              <div id="troubleshootingSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+            </section>
+          </div>
+          <section class="panel wide">
+            <div class="panel-title">Prioritized Troubleshooting Findings</div>
+            <div id="prioritySummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="ai">
+          <div class="tab-content-grid ai-grid">
+            <section class="panel">
+              <div class="panel-title">OpenRouter</div>
+              <label class="field">
+                API key
+                <input id="openRouterKey" type="password" autocomplete="off" placeholder="sk-or-..." />
+              </label>
+              <label class="field">
+                Model
+                <input id="openRouterModel" type="text" value="openai/gpt-4o-mini" />
+              </label>
+              <label class="field">
+                Prompt focus
+                <textarea id="aiQuestion" rows="5">Correlate trend CSV operation first, then event.log and jvm_agent runtime events, then allDatapoints snapshot state. Find hidden operational, reliability, watchdog, commissioning, and configuration-change insights. Prioritize likely root causes, supporting evidence, and next troubleshooting steps.</textarea>
+              </label>
+              <div class="toolbar left">
+                <button id="buildAiPayloadButton" type="button">Preview payload</button>
+                <button id="runAiAnalysisButton" type="button">Analyze</button>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Knowledge Base</div>
+              <div id="aiKnowledgeSummary" class="summary-list"></div>
+            </section>
+          </div>
+          <section class="panel wide">
+            <div class="panel-title">Payload Preview</div>
+              <pre id="aiPayloadPreview" class="payload-preview">Load debug data, then preview the payload.</pre>
+          </section>
+          <section class="panel wide">
+            <div class="panel-title">Model Response</div>
+            <div id="aiResult" class="ai-result muted">No model response yet.</div>
+          </section>
         </section>
 
         <section class="tab-panel" data-panel="series">

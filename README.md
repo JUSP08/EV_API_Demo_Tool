@@ -21,7 +21,8 @@ It is based on the Device Datalog Dashboard and keeps the same no-build deployme
 - Config: UnifiedDataAccess changes grouped by source and datapoint path
 - Runtime: JVM agent starts, full-GC events, and load outliers
 - Security: support/security posture events
-- Snapshot: device identity plus current health flags and counters from all datapoints
+- Snapshot: device identity, power-up/watchdog/boot reliability checks, and prioritized all-datapoint troubleshooting findings
+- AI Insights: optional OpenRouter-backed model analysis using a compact summary payload previewed in the browser
 - Series, Dataset, Status, Enums, Preview: inherited datalog inspection tools
 
 ## Local Use
@@ -39,3 +40,5 @@ http://127.0.0.1:5178/index.html
 ```
 
 Drop one or more CSV files and/or support bundle files onto the upload area. The trend plot shares one time axis across datapoints and parsed operational events.
+
+The AI Insights tab does not store an API key in the project. Enter an OpenRouter key in the browser, preview the compact payload, then run analysis when you want to send that summary to the model. The AI payload is ordered for troubleshooting: trend CSV operation first, event/JVM correlation second, and allDatapoints current-state context third. It also includes summarized local knowledge-base notes from the Belimo Energy Valve application guide, differential-pressure-control document, and EV 4 operating manual.
