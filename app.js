@@ -1116,6 +1116,8 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
   local.fillRect(0, 0, width, height);
   local.font = "11px Inter, system-ui, sans-serif";
 
+  drawCompareGapBands(local, row.device, margin, plotW, plotInnerH, xExtent);
+
   row.series.forEach((series, laneIndex) => {
     const top = margin.top + laneIndex * (laneH + laneGap);
     const yExtent = state.compare.scale === "shared" && sharedYByHeader[series.header]
@@ -2740,10 +2742,14 @@ function drawOperationHoverMarker(hit) {
 }
 
 function getTimestampGaps() {
-  const timestamps = state.rows.map((row) => ({
+  return getTimestampGapsForRows(state.rows);
+}
+
+function getTimestampGapsForRows(rows) {
+  const timestamps = rows.map((row) => ({
     value: row["Timestamp - UTC"],
     time: parseTimestamp(row["Timestamp - UTC"]),
-  })).filter((item) => Number.isFinite(item.time));
+  })).filter((item) => Number.isFinite(item.time)).sort((a, b) => a.time - b.time);
 
   const gaps = [];
   for (let index = 1; index < timestamps.length; index += 1) {
@@ -2761,6 +2767,15 @@ function getTimestampGaps() {
   return gaps;
 }
 
+function getCompareTimestampGaps(device) {
+  const baseTime = firstDeviceTime(device);
+  return getTimestampGapsForRows(device.rows).map((gap) => ({
+    ...gap,
+    start: compareStatusTime(gap.start, baseTime),
+    end: compareStatusTime(gap.end, baseTime),
+  }));
+}
+
 function drawGapBands(margin, width, height, xExtent) {
   const gaps = getTimestampGaps().filter((gap) => gap.end >= xExtent[0] && gap.start <= xExtent[1]);
   if (!gaps.length) return;
@@ -2775,6 +2790,22 @@ function drawGapBands(margin, width, height, xExtent) {
     ctx.fillRect(x1, margin.top, Math.max(2, x2 - x1), height);
   });
   ctx.restore();
+}
+
+function drawCompareGapBands(local, device, margin, width, height, xExtent) {
+  const gaps = getCompareTimestampGaps(device).filter((gap) => gap.end >= xExtent[0] && gap.start <= xExtent[1]);
+  if (!gaps.length) return;
+
+  local.save();
+  local.fillStyle = "rgba(236, 107, 98, 0.14)";
+  gaps.forEach((gap) => {
+    const start = Math.max(gap.start, xExtent[0]);
+    const end = Math.min(gap.end, xExtent[1]);
+    const x1 = margin.left + (start - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+    const x2 = margin.left + (end - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+    local.fillRect(x1, margin.top, Math.max(2, x2 - x1), height);
+  });
+  local.restore();
 }
 
 function getOperationLanes() {
