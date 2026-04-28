@@ -33,20 +33,48 @@
           </div>
         </header>
 
-        <nav class="tabbar" aria-label="Dashboard sections">
-          <button class="tab-button active" data-tab="trend" type="button">Trend</button>
-          <button class="tab-button" data-tab="compare" type="button">Compare</button>
-          <button class="tab-button" data-tab="operations" type="button">Operations</button>
-          <button class="tab-button" data-tab="config" type="button">Config</button>
-          <button class="tab-button" data-tab="runtime" type="button">Runtime</button>
-          <button class="tab-button" data-tab="security" type="button">Security</button>
-          <button class="tab-button" data-tab="snapshot" type="button">Snapshot</button>
-          <button class="tab-button" data-tab="ai" type="button">AI Insights</button>
-          <button class="tab-button" data-tab="series" type="button">Series</button>
-          <button class="tab-button" data-tab="dataset" type="button">Dataset</button>
-          <button class="tab-button" data-tab="status" type="button">Status</button>
-          <button class="tab-button" data-tab="enums" type="button">Enums</button>
-          <button class="tab-button" data-tab="preview" type="button">Preview</button>
+        <nav class="dashboard-nav" aria-label="Dashboard sections">
+          <div class="nav-groups" aria-label="Workflow categories">
+            <button class="nav-group-button active" data-group="review" data-default-tab="trend" type="button">
+              <span>Trend Review</span>
+              <small>Plot, compare, tune</small>
+            </button>
+            <button class="nav-group-button" data-group="diagnostics" data-default-tab="snapshot" type="button">
+              <span>System Diagnostics</span>
+              <small>Health, events, config</small>
+            </button>
+            <button class="nav-group-button" data-group="data" data-default-tab="dataset" type="button">
+              <span>Data Dictionary</span>
+              <small>Signals, status, raw rows</small>
+            </button>
+            <button class="nav-group-button" data-group="ai" data-default-tab="ai" type="button">
+              <span>AI Insights</span>
+              <small>Model-assisted review</small>
+            </button>
+          </div>
+          <div class="tabbar" aria-label="Sections in selected category">
+            <div class="tab-group active" data-tab-group="review">
+              <button class="tab-button active" data-group="review" data-tab="trend" type="button">Trend</button>
+              <button class="tab-button" data-group="review" data-tab="compare" type="button">Compare EVs</button>
+              <button class="tab-button" data-group="review" data-tab="series" type="button">Selected Signals</button>
+            </div>
+            <div class="tab-group" data-tab-group="diagnostics">
+              <button class="tab-button" data-group="diagnostics" data-tab="snapshot" type="button">Snapshot</button>
+              <button class="tab-button" data-group="diagnostics" data-tab="operations" type="button">Operations</button>
+              <button class="tab-button" data-group="diagnostics" data-tab="config" type="button">Config</button>
+              <button class="tab-button" data-group="diagnostics" data-tab="runtime" type="button">Runtime</button>
+              <button class="tab-button" data-group="diagnostics" data-tab="security" type="button">Security</button>
+            </div>
+            <div class="tab-group" data-tab-group="data">
+              <button class="tab-button" data-group="data" data-tab="dataset" type="button">Dataset</button>
+              <button class="tab-button" data-group="data" data-tab="status" type="button">Status Bits</button>
+              <button class="tab-button" data-group="data" data-tab="enums" type="button">Enums</button>
+              <button class="tab-button" data-group="data" data-tab="preview" type="button">Preview</button>
+            </div>
+            <div class="tab-group" data-tab-group="ai">
+              <button class="tab-button" data-group="ai" data-tab="ai" type="button">AI Insights</button>
+            </div>
+          </div>
         </nav>
 
         <section class="tab-panel active" data-panel="trend">
@@ -171,6 +199,10 @@
               <div id="configSummary" class="summary-list muted">No UDA configuration changes found yet.</div>
             </section>
           </div>
+          <section class="panel wide">
+            <div class="panel-title">Control-Impacting Changes</div>
+            <div id="configImpactSummary" class="summary-list muted">No control-impacting changes loaded yet.</div>
+          </section>
         </section>
 
         <section class="tab-panel" data-panel="runtime">
@@ -212,6 +244,16 @@
             <section class="panel">
               <div class="panel-title">Power / Boot / Watchdog</div>
               <div id="reliabilitySummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+            </section>
+            <section class="panel">
+              <div class="panel-title">Control Health</div>
+              <div id="controlHealthSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
+            </section>
+          </div>
+          <div class="tab-content-grid">
+            <section class="panel">
+              <div class="panel-title">Historical vs Current Faults</div>
+              <div id="faultPerspectiveSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
             </section>
             <section class="panel">
               <div class="panel-title">Troubleshooting Counters</div>

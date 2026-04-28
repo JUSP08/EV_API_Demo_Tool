@@ -138,6 +138,8 @@ const els = {
   selectedPlotCount: document.getElementById("selectedPlotCount"),
   recommendedPlotButton: document.getElementById("recommendedPlotButton"),
   clearPlotButton: document.getElementById("clearPlotButton"),
+  navGroupButtons: document.querySelectorAll(".nav-group-button"),
+  tabGroups: document.querySelectorAll(".tab-group"),
   tabButtons: document.querySelectorAll(".tab-button"),
   tabPanels: document.querySelectorAll(".tab-panel"),
   canvas: document.getElementById("plotCanvas"),
@@ -165,12 +167,15 @@ const els = {
   eventSummary: document.getElementById("eventSummary"),
   sourceSummary: document.getElementById("sourceSummary"),
   configSummary: document.getElementById("configSummary"),
+  configImpactSummary: document.getElementById("configImpactSummary"),
   runtimeStats: document.getElementById("runtimeStats"),
   runtimeSummary: document.getElementById("runtimeSummary"),
   securitySummary: document.getElementById("securitySummary"),
   deviceSummary: document.getElementById("deviceSummary"),
   snapshotSummary: document.getElementById("snapshotSummary"),
   reliabilitySummary: document.getElementById("reliabilitySummary"),
+  controlHealthSummary: document.getElementById("controlHealthSummary"),
+  faultPerspectiveSummary: document.getElementById("faultPerspectiveSummary"),
   troubleshootingSummary: document.getElementById("troubleshootingSummary"),
   prioritySummary: document.getElementById("prioritySummary"),
   openRouterKey: document.getElementById("openRouterKey"),
@@ -278,15 +283,30 @@ els.clearPlotButton.addEventListener("click", () => {
   renderSeriesTable();
 });
 
-els.tabButtons.forEach((button) => {
+els.navGroupButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const tab = button.dataset.tab;
-    els.tabButtons.forEach((item) => item.classList.toggle("active", item === button));
-    els.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab));
-    if (tab === "trend") requestAnimationFrame(drawPlot);
-    if (tab === "compare") requestAnimationFrame(renderCompare);
+    activateTab(button.dataset.defaultTab);
   });
 });
+
+els.tabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    activateTab(button.dataset.tab);
+  });
+});
+
+function activateTab(tab) {
+  const button = [...els.tabButtons].find((item) => item.dataset.tab === tab);
+  const group = button?.dataset.group;
+  if (!button || !group) return;
+
+  els.navGroupButtons.forEach((item) => item.classList.toggle("active", item.dataset.group === group));
+  els.tabGroups.forEach((item) => item.classList.toggle("active", item.dataset.tabGroup === group));
+  els.tabButtons.forEach((item) => item.classList.toggle("active", item === button));
+  els.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab));
+  if (tab === "trend") requestAnimationFrame(drawPlot);
+  if (tab === "compare") requestAnimationFrame(renderCompare);
+}
 
 window.addEventListener("resize", () => {
   drawPlot();
@@ -792,6 +812,7 @@ function renderStats() {
   }
   const timestamps = state.rows.map((row) => row["Timestamp - UTC"]).filter(Boolean);
   const metadata = Object.fromEntries(state.metadata.map((row) => [row[0], row.slice(1).join(", ")]));
+  const debugIdentity = debugDeviceIdentityLines();
   els.datasetStats.innerHTML = [
     statLine("Files", state.files.length.toLocaleString()),
     statLine("Rows", state.rows.length.toLocaleString()),
@@ -799,11 +820,74 @@ function renderStats() {
     statLine("Start", timestamps[0] ?? "n/a"),
     statLine("End", timestamps[timestamps.length - 1] ?? "n/a"),
     statLine("Serial", metadata["Serial Number"] ?? "n/a"),
+    ...debugIdentity,
   ].join("");
 }
 
 function statLine(label, value) {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function debugDeviceIdentityLines() {
+  if (!state.debug.deviceInfo) return [];
+  const identity = deviceIdentityFields();
+  return [
+    ["Belimo String", identity.belimoString],
+    ["Application", identity.applicationName],
+  ]
+    .filter(([, value]) => value !== "")
+    .map(([label, value]) => statLine(label, value));
+}
+
+function deviceIdentityFields() {
+  const info = state.debug.deviceInfo ?? {};
+  const appVersion = [
+    info.applicationModel?.["Application version"] ?? deviceInfoValue(["Application version", "ApplicationVersion"], [/application\s*version/i]),
+    info.applicationModel?.["Version Qualifier"] ?? deviceInfoValue(["Version Qualifier", "VersionQualifier"], [/version\s*qualifier/i]),
+  ].filter(Boolean).join(" ");
+  return {
+    serial: info.hardware?.["Serial number"] ?? deviceInfoValue(["Serial number", "SerialNumber"], [/serial\s*number/i]),
+    belimoString: (info.hardware?.["Belimo String"] ?? deviceInfoValue(["Belimo String", "BelimoString"], [/belimo\s*string/i])).trim(),
+    applicationName: info.applicationModel?.["Application name"] ?? deviceInfoValue(["Application name", "Application Name", "ApplicationName"], [/application\s*name/i]),
+    applicationVersion: appVersion.trim(),
+    platform: info.hardware?.Platform ?? deviceInfoValue(["Platform"], [/platform/i]),
+    activeBootSlot: info.software?.["Active Boot Slot"] ?? deviceInfoValue(["Active Boot Slot", "ActiveBootSlot"], [/active\s*boot\s*slot/i]),
+    csp: info.software?.["Csp Version"] ?? deviceInfoValue(["Csp Version", "CspVersion"], [/csp\s*version/i]),
+    bsp: info.software?.["Bsp version"] ?? deviceInfoValue(["Bsp version", "BspVersion"], [/bsp\s*version/i]),
+    dataprofile: `${info.deviceDataprofileStatus?.["Dataprofile ID"] ?? ""} ${info.deviceDataprofileStatus?.["Dataprofile Version"] ?? ""}`.trim(),
+    exportTime: info.dateAndTime ?? "",
+  };
+}
+
+function deviceInfoValue(exactKeys, fallbackPatterns) {
+  const info = state.debug.deviceInfo;
+  const normalizedKeys = exactKeys.map(normalizeJsonKey);
+  const exact = findJsonValue(info, (key) => normalizedKeys.includes(normalizeJsonKey(key)));
+  if (exact !== "") return exact;
+  return findJsonValue(info, (key) => fallbackPatterns.some((pattern) => pattern.test(key)));
+}
+
+function findJsonValue(value, keyMatches) {
+  if (!value || typeof value !== "object") return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findJsonValue(item, keyMatches);
+      if (found !== "") return found;
+    }
+    return "";
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (keyMatches(key) && child !== null && typeof child !== "object" && String(child).trim() !== "") {
+      return String(child);
+    }
+    const found = findJsonValue(child, keyMatches);
+    if (found !== "") return found;
+  }
+  return "";
+}
+
+function normalizeJsonKey(key) {
+  return String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function renderCompare() {
@@ -1367,6 +1451,12 @@ function renderConfig() {
   els.configSummary.innerHTML = changes.length
     ? topEntries(paths, 16).map(([name, count]) => renderSummaryLine(shortenPath(name), `${count.toLocaleString()} changes`)).join("")
     : "No UDA configuration changes found yet.";
+
+  const impactChanges = controlImpactingChanges();
+  els.configImpactSummary.className = impactChanges.length ? "summary-list" : "summary-list muted";
+  els.configImpactSummary.innerHTML = impactChanges.length
+    ? impactChanges.slice(-24).reverse().map(renderConfigImpactLine).join("")
+    : "No control-impacting changes loaded yet.";
 }
 
 function renderRuntime() {
@@ -1375,6 +1465,7 @@ function renderRuntime() {
   const gcs = runtime.filter((event) => event.type === "gc");
   const maxGc = Math.max(...gcs.map((event) => event.gcMillis), NaN);
   const maxLoad = Math.max(...gcs.map((event) => event.loadMillis), NaN);
+  const maxWindow = Math.max(...gcs.map((event) => event.windowSeconds), NaN);
   const versions = countBy(starts, (event) => event.version);
 
   els.runtimeStats.innerHTML = runtime.length ? [
@@ -1382,6 +1473,7 @@ function renderRuntime() {
     statLine("Full GC events", gcs.length.toLocaleString()),
     statLine("Max GC", Number.isFinite(maxGc) ? `${maxGc.toLocaleString()} ms` : "n/a"),
     statLine("Max load", Number.isFinite(maxLoad) ? `${maxLoad.toLocaleString()} ms` : "n/a"),
+    statLine("Max GC window", Number.isFinite(maxWindow) ? `${maxWindow.toLocaleString()} sec` : "n/a"),
     statLine("Versions", Object.keys(versions).join(", ") || "n/a"),
   ].join("") : statLine("Status", "Waiting for JVM log");
 
@@ -1406,14 +1498,18 @@ function renderSnapshot() {
   if (!info) {
     els.deviceSummary.innerHTML = statLine("Status", "Waiting for debugDeviceInformation.json");
   } else {
+    const identity = deviceIdentityFields();
     els.deviceSummary.innerHTML = [
-      statLine("Serial", info.hardware?.["Serial number"] ?? "n/a"),
-      statLine("Platform", info.hardware?.Platform ?? "n/a"),
-      statLine("Active slot", info.software?.["Active Boot Slot"] ?? "n/a"),
-      statLine("CSP", info.software?.["Csp Version"] ?? "n/a"),
-      statLine("BSP", info.software?.["Bsp version"] ?? "n/a"),
-      statLine("Dataprofile", `${info.deviceDataprofileStatus?.["Dataprofile ID"] ?? "n/a"} ${info.deviceDataprofileStatus?.["Dataprofile Version"] ?? ""}`.trim()),
-      statLine("Export time", info.dateAndTime ?? "n/a"),
+      statLine("Serial", identity.serial || "n/a"),
+      statLine("Belimo String", identity.belimoString || "n/a"),
+      statLine("Application", identity.applicationName || "n/a"),
+      statLine("Application version", identity.applicationVersion || "n/a"),
+      statLine("Platform", identity.platform || "n/a"),
+      statLine("Active slot", identity.activeBootSlot || "n/a"),
+      statLine("CSP", identity.csp || "n/a"),
+      statLine("BSP", identity.bsp || "n/a"),
+      statLine("Dataprofile", identity.dataprofile || "n/a"),
+      statLine("Export time", identity.exportTime || "n/a"),
     ].join("");
   }
 
@@ -1427,6 +1523,18 @@ function renderSnapshot() {
   els.reliabilitySummary.className = reliability.length ? "summary-list" : "summary-list muted";
   els.reliabilitySummary.innerHTML = reliability.length
     ? reliability.map((item) => renderFindingLine(item)).join("")
+    : "No allDatapoints.json loaded yet.";
+
+  const controlHealth = buildControlHealthSummary();
+  els.controlHealthSummary.className = controlHealth.length ? "summary-list" : "summary-list muted";
+  els.controlHealthSummary.innerHTML = controlHealth.length
+    ? controlHealth.map((item) => renderFindingLine(item)).join("")
+    : "No allDatapoints.json loaded yet.";
+
+  const faultPerspective = buildFaultPerspectiveSummary();
+  els.faultPerspectiveSummary.className = faultPerspective.length ? "summary-list" : "summary-list muted";
+  els.faultPerspectiveSummary.innerHTML = faultPerspective.length
+    ? faultPerspective.map((item) => renderFindingLine(item)).join("")
     : "No allDatapoints.json loaded yet.";
 
   const troubleshooting = buildTroubleshootingSummary();
@@ -1457,8 +1565,23 @@ function buildInsights() {
   const updateErrors = state.debug.events.filter((event) => event.category === "update" && event.severity === "Error");
   const securityEvents = state.debug.events.filter((event) => event.severity === "Security");
   const starts = state.debug.jvmEvents.filter((event) => event.type === "start");
+  const modelStarts = state.debug.events.filter((event) => event.component === "ModelExecutorImpl").length;
+  const configImpact = controlImpactingChanges();
+  const majorCounters = majorHistoricalFaultCounters().filter((item) => item.value > 0);
   const datapoints = state.debug.datapoints ?? {};
 
+  if (modelStarts || starts.length) insights.push({
+    title: "Restart history available",
+    detail: `${starts.length.toLocaleString()} JVM agent starts and ${modelStarts.toLocaleString()} model starts were parsed.`,
+  });
+  if (configImpact.length) insights.push({
+    title: "Control-impacting configuration changes",
+    detail: `${configImpact.length.toLocaleString()} setup/control changes were found, including bus, setpoint, flow limit, wizard, or identity changes.`,
+  });
+  if (majorCounters.length) insights.push({
+    title: "Historical fault burden differs from active health",
+    detail: `${majorCounters.length.toLocaleString()} non-zero historical fault counters are present; check Snapshot for active-vs-historical interpretation.`,
+  });
   if (network.length) insights.push({
     title: "Network recovery loop detected",
     detail: `${network.length.toLocaleString()} network watchdog recovery events were found.`,
@@ -1471,10 +1594,6 @@ function buildInsights() {
     title: "Security exposure markers present",
     detail: `${securityEvents.length.toLocaleString()} security events report enabled privileged/support features.`,
   });
-  if (starts.length) insights.push({
-    title: "Runtime restart history available",
-    detail: `${starts.length.toLocaleString()} JVM agent starts were parsed from the support log.`,
-  });
   if (state.debug.watchdogCounter !== null) insights.push({
     title: "Watchdog counter parsed",
     detail: `Current watchdog counter value is ${state.debug.watchdogCounter}.`,
@@ -1484,6 +1603,32 @@ function buildInsights() {
     detail: "Use the Snapshot tab to inspect active flags and non-zero counters at export time.",
   });
   return insights;
+}
+
+function controlImpactingChanges() {
+  return state.debug.configChanges
+    .map((change) => ({ ...change, impact: classifyConfigImpact(change.path) }))
+    .filter((change) => change.impact);
+}
+
+function classifyConfigImpact(path) {
+  const text = path.toLowerCase();
+  if (/selectwatercontrolmode|watercontrol|powercontrol|differentialwaterpressure|differentialtemperature|setpoint|minimumwaterflow|maximumwaterflow|pid|deadband/.test(text)) return "Control";
+  if (/selectbusprotocol|bus|modbus|bacnet|watchdog|setpointsource/.test(text)) return "Communication";
+  if (/wizard/.test(text)) return "Commissioning";
+  if (/deviceidentification|description|installationlocation/.test(text)) return "Identity";
+  if (/poe|power|unit_settings|units/.test(text)) return "Setup";
+  return "";
+}
+
+function renderConfigImpactLine(change) {
+  const source = change.source || "unknown source";
+  return `
+    <div class="status-line">
+      <strong><span class="badge update">${escapeHtml(change.impact)}</span> ${escapeHtml(shortenPath(change.path))}</strong>
+      <span>${escapeHtml(formatFullX(change.time))}: ${escapeHtml(String(change.value))} from ${escapeHtml(source)}</span>
+    </div>
+  `;
 }
 
 function noteworthyDatapoints() {
@@ -1504,39 +1649,133 @@ function buildReliabilitySummary() {
   if (!dp) return [];
   const items = [];
   const add = (title, detail, severity = "system") => items.push({ title, detail, severity });
-  const powerUps = numberFromDatapoint("OcPowerUpCounter");
-  const uptime = numberFromDatapoint("OcUptime");
-  const watchdogReboots = numberFromDatapoint("OcWatchdogRebootCounter");
+  const powerUps = numberFromAnyDatapoint(["OcPowerUpCounter", "powerUpCount"]);
+  const uptime = numberFromAnyDatapoint(["OcUptime", "uptime"]);
+  const operationHours = numberFromAnyDatapoint(["OcApplicationOperationHours", "ApplicationOperationHours"]);
+  const watchdogReboots = numberFromAnyDatapoint(["OcWatchdogRebootCounter", "WatchdogRebootCounter"]);
   const watchdogFile = state.debug.watchdogCounter;
+  const jvmStarts = state.debug.jvmEvents.filter((event) => event.type === "start").length;
+  const modelStarts = state.debug.events.filter((event) => event.component === "ModelExecutorImpl").length;
+  const systemRuns = state.debug.events.filter((event) => event.component === "SystemService").length;
   const busTriggers = [
     ["Bus", "BusWatchdogTriggered"],
     ["BACnet/IP", "BacnetIpBusWatchdogTriggered"],
     ["BACnet MS/TP", "BacnetMstpBusWatchdogTriggered"],
     ["Modbus RTU", "ModbusRtuBusWatchdogTriggered"],
     ["Modbus TCP", "ModbusTcpBusWatchdogTriggered"],
+    ["Modbus TCP", "Modbus TCP BusWatchdog Triggered"],
     ["MP slave", "MpSlaveBusWatchdogTriggered"],
   ].map(([label, key]) => ({ label, key, value: numberFromDatapoint(key) })).filter((item) => Number.isFinite(item.value));
 
   if (Number.isFinite(powerUps)) add("Power-up counter", `${powerUps.toLocaleString()} recorded power-ups`, powerUps > 1 ? "update" : "system");
   if (Number.isFinite(uptime)) add("OC uptime", formatDuration(uptime), uptime < 3600 && powerUps > 1 ? "update" : "system");
-  add("Active boot slot", stringFromDatapoint("OcActiveBootSlot") || state.debug.bootSlot?.["bootjournal.lastboot.slot"] || "n/a");
+  if (Number.isFinite(operationHours)) add("Application operation hours", `${operationHours.toLocaleString()} hours`);
+  if (jvmStarts) add("JVM agent starts", jvmStarts.toLocaleString(), jvmStarts > 1 ? "update" : "system");
+  if (modelStarts || systemRuns) add("Model/System starts", `${modelStarts.toLocaleString()} model starts, ${systemRuns.toLocaleString()} system-running events`, modelStarts > 1 ? "update" : "system");
+  add("Active boot slot", stringFromAnyDatapoint(["OcActiveBootSlot", "ActiveBootSlot"]) || state.debug.deviceInfo?.software?.["Active Boot Slot"] || state.debug.bootSlot?.["bootjournal.lastboot.slot"] || "n/a");
   add("Last successful boot slot", state.debug.bootSlot?.["bootjournal.lastsuccessfulboot.slot"] || "n/a");
-  add("Power supply status", stringFromDatapoint("PowerSupplyStatus") || "n/a");
+  add("Power supply status", stringFromAnyDatapoint(["PowerSupplyStatus", "powerState", "poeSupplyStatus"]) || "n/a");
   add("Watchdog support", stringFromDatapoint("WatchdogSupported") || "n/a");
   if (Number.isFinite(watchdogReboots)) add("OC watchdog reboot counter", watchdogReboots.toLocaleString(), watchdogReboots ? "error" : "system");
   add("Last reboot by watchdog", stringFromDatapoint("OcLastRebootByWatchdog") || "n/a", stringFromDatapoint("OcLastRebootByWatchdog") === "true" ? "error" : "system");
   add("Last watchdog cause", stringFromDatapoint("OcLastWatchdogCause") || "None reported");
   if (watchdogFile !== null) add("watchdog.counter file", String(watchdogFile), watchdogFile ? "error" : "system");
   add("Watchdog timeouts", [
-    `BACnet ${stringFromDatapoint("SetBacnetWatchdogTimeout") || "n/a"}s`,
-    `Modbus ${stringFromDatapoint("SetModbusWatchdogTimeout") || "n/a"}s`,
-    `MP ${stringFromDatapoint("SetMpSlaveWatchdogTimeout") || "n/a"}s`,
+    `BACnet ${stringFromAnyDatapoint(["SetBacnetWatchdogTimeout", "Set Bacnet Watchdog Timeout"]) || "n/a"}s`,
+    `Modbus ${stringFromAnyDatapoint(["SetModbusWatchdogTimeout", "modbusWatchdogTimeout"]) || "n/a"}s`,
+    `MP ${stringFromAnyDatapoint(["SetMpSlaveWatchdogTimeout", "mpWatchdogTimeout"]) || "n/a"}s`,
     `Any comm ${stringFromDatapoint("anyCommunicationWatchdogTimeout") || "n/a"}s`,
   ].join(", "));
   busTriggers.forEach((item) => {
     add(`${item.label} watchdog triggers`, item.value.toLocaleString(), item.value > 0 ? "error" : "system");
   });
   return items;
+}
+
+function buildControlHealthSummary() {
+  const dp = state.debug.datapoints;
+  if (!dp) return [];
+  const items = [];
+  const add = (title, detail, severity = "system") => items.push({ title, detail, severity });
+  const controlMode = numberFromDatapoint("SelectWaterControlMode");
+  const setpointSource = stringFromDatapoint("SelectSetpointSource");
+  const busProtocol = stringFromDatapoint("SelectBusProtocol");
+  const flowActual = numberFromDatapoint("AbsoluteWaterFlow");
+  const flowSetpoint = numberFromDatapoint("AbsoluteWaterFlowSetpoint");
+  const relFlow = numberFromDatapoint("RelativeWaterFlow");
+  const relSetpoint = numberFromDatapoint("RelativeWaterFlowSetpoint");
+  const maxFlow = numberFromDatapoint("SetMaximumWaterFlow");
+  const minFlow = numberFromDatapoint("SetMinimumWaterFlow");
+  const dT = numberFromDatapoint("DifferentialWaterTemperature");
+  const dTSetpoint = numberFromDatapoint("DifferentialWaterTemperatureSetpoint");
+  const setpointReached = stringFromAnyDatapoint(["ControllerSetpointReached", "ctrl_flow_sp_reached"]);
+
+  if (Number.isFinite(controlMode)) add("Control mode", `${controlModeLabel(controlMode)} (${controlMode})`);
+  if (setpointSource) add("Setpoint source", `${setpointSource}${stringFromDatapoint("bus_setpoint_selected_sl") === "true" ? " (bus selected)" : ""}`);
+  if (busProtocol) add("Bus protocol", busProtocol);
+  if (Number.isFinite(maxFlow) || Number.isFinite(minFlow)) add("Flow limits", `Min ${formatEngineeringValue(minFlow, "m3/s")}, max ${formatEngineeringValue(maxFlow, "m3/s")}`);
+  if (Number.isFinite(flowActual) && Number.isFinite(flowSetpoint)) {
+    const diff = flowActual - flowSetpoint;
+    const pct = flowSetpoint ? diff / flowSetpoint * 100 : NaN;
+    add("Absolute flow tracking", `${formatEngineeringValue(flowActual, "m3/s")} actual vs ${formatEngineeringValue(flowSetpoint, "m3/s")} setpoint (${formatSignedPercent(pct)} error)`, Math.abs(pct) > 5 ? "update" : "system");
+  }
+  if (Number.isFinite(relFlow) && Number.isFinite(relSetpoint)) {
+    const diff = relFlow - relSetpoint;
+    add("Relative flow tracking", `${formatNumber(relFlow)}% actual vs ${formatNumber(relSetpoint)}% setpoint (${formatSignedNumber(diff)} points)`, Math.abs(diff) > 5 ? "update" : "system");
+  }
+  if (Number.isFinite(dT) && Number.isFinite(dTSetpoint)) {
+    const diff = dT - dTSetpoint;
+    add("Delta T tracking", `${formatNumber(dT)} K actual vs ${formatNumber(dTSetpoint)} K setpoint (${formatSignedNumber(diff)} K)`, Math.abs(diff) > 2 ? "update" : "system");
+  }
+  if (setpointReached) add("Setpoint reached", setpointReached, /false|0/i.test(setpointReached) ? "update" : "system");
+  return items;
+}
+
+function buildFaultPerspectiveSummary() {
+  const dp = state.debug.datapoints;
+  if (!dp) return [];
+  const items = [];
+  const add = (title, detail, severity = "system") => items.push({ title, detail, severity });
+  const activeFlags = [
+    ["Collective error active", stringFromDatapoint("collective_error"), (value) => String(value).toLowerCase() === "true"],
+    ["No collective error", stringFromDatapoint("no_collective_error"), (value) => String(value).toLowerCase() === "false"],
+    ["Flow sensor OK", stringFromDatapoint("flow_sensor_ok"), (value) => String(value).toLowerCase() === "false"],
+    ["Power OK", stringFromDatapoint("power_ok"), (value) => String(value).toLowerCase() === "false"],
+    ["Flow sensor not OK", stringFromDatapoint("flow_sensor_not_ok"), (value) => String(value).toLowerCase() === "true"],
+    ["Flow measurement error active", stringFromDatapoint("flow_measurement_error_sl"), (value) => String(value).toLowerCase() === "true"],
+  ].filter(([, value]) => value !== "");
+
+  activeFlags.forEach(([title, value, isBad]) => {
+    add(title, value, isBad(value) ? "error" : "system");
+  });
+
+  const counters = majorHistoricalFaultCounters().filter((item) => item.value > 0);
+  if (counters.length) {
+    add("Historical counters present", `${counters.length.toLocaleString()} non-zero counters found; this can coexist with a currently healthy snapshot.`, "update");
+    counters.slice(0, 8).forEach((counter) => {
+      add(counter.label, counter.value.toLocaleString(), counter.severity);
+    });
+  } else {
+    add("Historical counters", "No major non-zero historical fault counters found.");
+  }
+  return items;
+}
+
+function majorHistoricalFaultCounters() {
+  const keys = [
+    ["Cummulated error counter", "CummulatedErrorCounter-TotalOccurences", "error"],
+    ["Error count", "errorCount", "error"],
+    ["Flow measure errors", "FlowMeasureError-ErrOccurance", "error"],
+    ["Flow setpoint not reached", "FlowSetpointNotReached-ErrOccurance", "update"],
+    ["Flow with closed valve", "FlowWithClosedValve-ErrOccurance", "update"],
+    ["Reverse flow", "ReverseFlow-ErrOccurance", "update"],
+    ["No communication to actuator", "NoComm2Actuator-ErrOccurance", "error"],
+    ["Modbus TCP watchdog", "Modbus TCP BusWatchdog Triggered", "error"],
+    ["BACnet/IP watchdog", "BacnetIpBusWatchdogTriggered", "error"],
+  ];
+  return keys
+    .map(([label, key, severity]) => ({ label, key, severity, value: numberFromDatapoint(key) }))
+    .filter((item) => Number.isFinite(item.value));
 }
 
 function buildTroubleshootingSummary() {
@@ -1581,12 +1820,16 @@ function buildPrioritizedFindings() {
   if (!state.debug.datapoints) return [];
   const findings = [];
   const add = (title, detail, severity = "system") => findings.push({ title, detail, severity });
-  const powerUps = numberFromDatapoint("OcPowerUpCounter");
-  const uptime = numberFromDatapoint("OcUptime");
-  const watchdogReboots = numberFromDatapoint("OcWatchdogRebootCounter");
-  const bacnetWatchdog = numberFromDatapoint("BacnetIpBusWatchdogTriggered");
+  const powerUps = numberFromAnyDatapoint(["OcPowerUpCounter", "powerUpCount"]);
+  const uptime = numberFromAnyDatapoint(["OcUptime", "uptime"]);
+  const watchdogReboots = numberFromAnyDatapoint(["OcWatchdogRebootCounter", "WatchdogRebootCounter"]);
+  const bacnetWatchdog = numberFromAnyDatapoint(["BacnetIpBusWatchdogTriggered", "Modbus TCP BusWatchdog Triggered"]);
   const networkRecoveries = state.debug.events.filter((event) => event.category === "network").length;
   const updateErrors = state.debug.events.filter((event) => event.category === "update" && event.severity === "Error").length;
+  const configImpact = controlImpactingChanges().length;
+  const controlMode = numberFromDatapoint("SelectWaterControlMode");
+  const actualFlow = numberFromDatapoint("AbsoluteWaterFlow");
+  const flowSetpoint = numberFromDatapoint("AbsoluteWaterFlowSetpoint");
 
   if (Number.isFinite(powerUps) && powerUps > 1 && Number.isFinite(uptime) && uptime < 3600) {
     add("Recent reboot after multiple power-ups", `Power-up counter is ${powerUps}, while uptime is only ${formatDuration(uptime)}. This suggests the export was taken soon after a restart/power cycle.`, "update");
@@ -1597,7 +1840,19 @@ function buildPrioritizedFindings() {
     add("Watchdog reboot evidence found", `OC watchdog reboots: ${watchdogReboots}; watchdog.counter: ${state.debug.watchdogCounter}.`, "error");
   }
   if ((bacnetWatchdog || 0) > 0) {
-    add("BACnet/IP bus watchdog triggered", `${bacnetWatchdog} BACnet/IP bus watchdog trigger(s) are reported even though OC watchdog reboots are not. Check bus supervision separately from system resets.`, "error");
+    add("Bus watchdog triggered", `${bacnetWatchdog} bus watchdog trigger(s) are reported even though OC watchdog reboots may be clean. Check bus supervision separately from system resets.`, "error");
+  }
+  if (configImpact) {
+    add("Control-impacting setup changes found", `${configImpact.toLocaleString()} configuration changes affect control, communication, commissioning, identity, or setup context. Review the Config tab before blaming device health.`, "update");
+  }
+  if (Number.isFinite(controlMode)) {
+    add("Control mode context", `Current water control mode is ${controlModeLabel(controlMode)} (${controlMode}); interpret trend tracking against this mode.`, "system");
+  }
+  if (Number.isFinite(actualFlow) && Number.isFinite(flowSetpoint) && flowSetpoint) {
+    const errorPct = (actualFlow - flowSetpoint) / flowSetpoint * 100;
+    if (Math.abs(errorPct) <= 5) {
+      add("Current flow tracking is close", `AbsoluteWaterFlow is within ${formatSignedPercent(errorPct)} of AbsoluteWaterFlowSetpoint at export time.`, "system");
+    }
   }
   if (networkRecoveries) {
     add("Network recovery loop in event log", `${networkRecoveries} network interface recovery events were parsed. Correlate these with bus watchdog triggers and communication gaps.`, "error");
@@ -1634,9 +1889,25 @@ function stringFromDatapoint(key) {
   return value === undefined || value === null ? "" : String(value);
 }
 
+function stringFromAnyDatapoint(keys) {
+  for (const key of keys) {
+    const value = stringFromDatapoint(key);
+    if (value !== "") return value;
+  }
+  return "";
+}
+
 function numberFromDatapoint(key) {
   const value = Number(stringFromDatapoint(key));
   return Number.isFinite(value) ? value : NaN;
+}
+
+function numberFromAnyDatapoint(keys) {
+  for (const key of keys) {
+    const value = numberFromDatapoint(key);
+    if (Number.isFinite(value)) return value;
+  }
+  return NaN;
 }
 
 function isMeaningfulDatapointValue(value) {
@@ -1674,6 +1945,13 @@ function buildAiPayload() {
       files: state.debug.files.filter((name) => /event\.log|jvm_agent/i.test(name)),
       eventCounts,
       topConfigSources: topEntries(sourceCounts, 10),
+      controlImpactingChanges: controlImpactingChanges().slice(-40).map((change) => ({
+        time: formatFullX(change.time),
+        impact: change.impact,
+        path: change.path,
+        value: change.value,
+        source: change.source,
+      })),
       networkRecoveryEvents: state.debug.events.filter((event) => event.category === "network").slice(-40).map(compactEvent),
       updateEvents: state.debug.events.filter((event) => event.category === "update").slice(-40).map(compactEvent),
       securityEvents: state.debug.events.filter((event) => event.category === "security").slice(-30).map(compactEvent),
@@ -1730,17 +2008,23 @@ function buildTrendContextForAi() {
 }
 
 function buildSnapshotContextForAi() {
+  const identity = deviceIdentityFields();
   return {
     device: {
-      serial: state.debug.deviceInfo?.hardware?.["Serial number"] ?? "",
-      platform: state.debug.deviceInfo?.hardware?.Platform ?? "",
-      csp: state.debug.deviceInfo?.software?.["Csp Version"] ?? "",
-      bsp: state.debug.deviceInfo?.software?.["Bsp version"] ?? "",
-      activeBootSlot: state.debug.deviceInfo?.software?.["Active Boot Slot"] ?? stringFromDatapoint("OcActiveBootSlot"),
+      serial: identity.serial,
+      belimoString: identity.belimoString,
+      applicationName: identity.applicationName,
+      applicationVersion: identity.applicationVersion,
+      platform: identity.platform,
+      csp: identity.csp,
+      bsp: identity.bsp,
+      activeBootSlot: identity.activeBootSlot || stringFromAnyDatapoint(["OcActiveBootSlot", "ActiveBootSlot"]),
       dataprofile: state.debug.deviceInfo?.deviceDataprofileStatus ?? null,
-      exportTime: state.debug.deviceInfo?.dateAndTime ?? "",
+      exportTime: identity.exportTime,
     },
     powerBootWatchdog: buildReliabilitySummary(),
+    controlHealth: buildControlHealthSummary(),
+    currentVsHistoricalFaults: buildFaultPerspectiveSummary(),
     prioritizedFindings: buildPrioritizedFindings(),
     troubleshootingCounters: buildTroubleshootingSummary().slice(0, 100),
     notableDatapoints: noteworthyDatapoints().slice(0, 80).map(([name, value]) => ({ name, value })),
@@ -2146,21 +2430,22 @@ function parseTimestamp(value) {
 }
 
 function drawPlot() {
-  fitCanvas();
-  ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
   hidePlotTooltip();
   const series = selectedSeries().filter((item) => item.points.length > 1);
   const operationLanes = els.operationsOverlayToggle.checked ? getOperationLanes() : [];
+  const statusLanes = els.statusOverlayToggle.checked ? getStatusLanes() : [];
+  sizeTrendCanvasForOverlays(statusLanes, operationLanes);
+  fitCanvas();
+  ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
   const timelinePoints = operationLanes.flatMap((lane) => lane.events.map((event) => event.time));
   const allSeriesPoints = series.flatMap((item) => item.points);
   const xValues = [...allSeriesPoints.map((point) => point.x), ...timelinePoints].filter(Number.isFinite);
   els.emptyState.style.display = xValues.length ? "none" : "grid";
   if (!xValues.length) return;
 
-  const statusLanes = els.statusOverlayToggle.checked ? getStatusLanes() : [];
   const statusHeight = statusLanes.length ? 36 + statusLanes.length * 22 : 0;
   const operationHeight = operationLanes.length ? 36 + operationLanes.length * 24 : 0;
   const margin = { top: 26, right: 22, bottom: 58 + statusHeight + operationHeight, left: 90 };
@@ -2205,6 +2490,14 @@ function drawPlot() {
   drawOperationTimeline(operationLanes, margin, width, height, xExtent, statusLanes.length);
   drawZoomSelection();
   drawLegend(visibleSeries, margin);
+}
+
+function sizeTrendCanvasForOverlays(statusLanes, operationLanes) {
+  const statusHeight = statusLanes.length ? 36 + statusLanes.length * 22 : 0;
+  const operationHeight = operationLanes.length ? 36 + operationLanes.length * 24 : 0;
+  const desiredHeight = Math.max(520, 26 + 300 + 58 + statusHeight + operationHeight);
+  els.canvas.style.height = `${desiredHeight}px`;
+  els.canvas.parentElement.style.minHeight = `${Math.max(420, desiredHeight)}px`;
 }
 
 function handlePlotHover(event) {
@@ -2865,6 +3158,23 @@ function formatNumber(value) {
   if (!Number.isFinite(value)) return "n/a";
   if (Math.abs(value) >= 100000 || Math.abs(value) < 0.01 && value !== 0) return value.toExponential(3);
   return value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+function formatEngineeringValue(value, unit) {
+  if (!Number.isFinite(value)) return "n/a";
+  return `${formatNumber(value)} ${unit}`;
+}
+
+function formatSignedPercent(value) {
+  if (!Number.isFinite(value)) return "n/a";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value)}%`;
+}
+
+function formatSignedNumber(value) {
+  if (!Number.isFinite(value)) return "n/a";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value)}`;
 }
 
 function formatX(value) {
