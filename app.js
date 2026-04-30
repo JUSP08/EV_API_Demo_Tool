@@ -285,7 +285,7 @@ els.clearPlotButton.addEventListener("click", () => {
 
 els.navGroupButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    activateTab(button.dataset.defaultTab);
+    activateGroup(button.dataset.group);
   });
 });
 
@@ -296,9 +296,12 @@ els.tabButtons.forEach((button) => {
 });
 
 function activateTab(tab) {
-  const button = [...els.tabButtons].find((item) => item.dataset.tab === tab);
+  const button = [...els.tabButtons].find((item) => item.dataset.tab === tab && !item.hidden);
   const group = button?.dataset.group;
-  if (!button || !group) return;
+  if (!button || !group) {
+    activateTab(firstVisibleTab());
+    return;
+  }
 
   els.navGroupButtons.forEach((item) => item.classList.toggle("active", item.dataset.group === group));
   els.tabGroups.forEach((item) => item.classList.toggle("active", item.dataset.tabGroup === group));
@@ -306,6 +309,74 @@ function activateTab(tab) {
   els.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab));
   if (tab === "trend") requestAnimationFrame(drawPlot);
   if (tab === "compare") requestAnimationFrame(renderCompare);
+}
+
+function activateGroup(group) {
+  const groupButton = [...els.navGroupButtons].find((button) => button.dataset.group === group && !button.hidden);
+  const preferred = groupButton?.dataset.defaultTab;
+  const preferredButton = [...els.tabButtons].find((button) => button.dataset.tab === preferred && !button.hidden);
+  const fallbackButton = [...els.tabButtons].find((button) => button.dataset.group === group && !button.hidden);
+  activateTab((preferredButton || fallbackButton)?.dataset.tab || firstVisibleTab());
+}
+
+function updateNavigationAvailability() {
+  els.tabButtons.forEach((button) => {
+    button.hidden = !isTabAvailable(button.dataset.tab);
+  });
+
+  els.tabGroups.forEach((group) => {
+    const hasVisibleTab = [...group.querySelectorAll(".tab-button")].some((button) => !button.hidden);
+    group.hidden = !hasVisibleTab;
+    group.classList.toggle("active", hasVisibleTab && group.classList.contains("active"));
+  });
+
+  els.navGroupButtons.forEach((button) => {
+    const hasVisibleTab = [...els.tabButtons].some((tabButton) => tabButton.dataset.group === button.dataset.group && !tabButton.hidden);
+    button.hidden = !hasVisibleTab;
+  });
+
+  const activeTab = document.querySelector(".tab-panel.active")?.dataset.panel;
+  const activeButton = [...els.tabButtons].find((button) => button.dataset.tab === activeTab && !button.hidden);
+  activateTab(activeButton?.dataset.tab || firstVisibleTab());
+}
+
+function firstVisibleTab() {
+  return [...els.tabButtons].find((button) => !button.hidden)?.dataset.tab || "trend";
+}
+
+function isTabAvailable(tab) {
+  const hasCsv = state.rows.length > 0;
+  const hasDebugFiles = state.debug.files.length > 0;
+  switch (tab) {
+    case "trend":
+      return true;
+    case "compare":
+      return state.devices.length > 1;
+    case "series":
+      return hasCsv;
+    case "dataset":
+      return hasCsv;
+    case "status":
+      return state.columns.some((column) => column.kind === "bitfield") || getStatusLanes().length > 0;
+    case "enums":
+      return state.columns.some((column) => column.enumMap?.size);
+    case "preview":
+      return hasCsv;
+    case "snapshot":
+      return Boolean(state.debug.deviceInfo || state.debug.datapoints || state.debug.bootSlot || state.debug.watchdogCounter !== null);
+    case "operations":
+      return state.debug.events.length > 0;
+    case "config":
+      return state.debug.configChanges.length > 0;
+    case "runtime":
+      return state.debug.jvmEvents.length > 0;
+    case "security":
+      return state.debug.events.some((event) => event.severity === "Security");
+    case "ai":
+      return hasCsv || hasDebugFiles;
+    default:
+      return true;
+  }
 }
 
 window.addEventListener("resize", () => {
@@ -323,17 +394,18 @@ els.canvas.addEventListener("wheel", handlePlotWheel, { passive: false });
 
 function readFiles(files, append) {
   let remaining = files.length;
-  const loaded = [];
+  const loaded = new Array(files.length);
 
-  files.forEach((file) => {
+  files.forEach((file, index) => {
     const reader = new FileReader();
     reader.onload = () => {
-      loaded.push({ name: file.name, text: String(reader.result) });
+      loaded[index] = { name: file.name, text: String(reader.result) };
       remaining -= 1;
       if (remaining === 0) {
-        const csvFiles = loaded.filter((item) => isCsvLikeFile(item));
-        const debugFiles = loaded.filter((item) => !isCsvLikeFile(item));
-        csvFiles.forEach((item, index) => loadCsv(item.text, item.name, append || index > 0));
+        const readyFiles = loaded.filter(Boolean);
+        const csvFiles = readyFiles.filter((item) => isCsvLikeFile(item));
+        const debugFiles = readyFiles.filter((item) => !isCsvLikeFile(item));
+        if (csvFiles.length) loadCsvBatch(csvFiles, append);
         if (debugFiles.length) loadDebugFiles(debugFiles);
       }
     };
@@ -343,6 +415,56 @@ function readFiles(files, append) {
 
 function isCsvLikeFile(file) {
   return /\.(csv|txt)$/i.test(file.name) && file.text.includes("Timestamp - UTC");
+}
+
+function loadCsvBatch(files, append = false) {
+  const parsedFiles = files.map((file) => {
+    const parsed = parseDatalogCsv(file.text);
+    return {
+      name: file.name,
+      parsed,
+      device: createDeviceDataset(parsed, file.name),
+    };
+  });
+  if (!parsedFiles.length) return;
+
+  const previousSelected = new Set(state.selected);
+  const previousUnits = new Map(state.units);
+  const hasExistingTrend = append && state.rows.length;
+  const primaryHeaders = hasExistingTrend ? state.headers : parsedFiles[0].parsed.headers;
+  const trendFiles = parsedFiles.filter((file) => headersMatch(file.parsed.headers, primaryHeaders));
+  const compareOnlyFiles = parsedFiles.filter((file) => !headersMatch(file.parsed.headers, primaryHeaders));
+
+  if (!hasExistingTrend) {
+    const primary = trendFiles[0] ?? parsedFiles[0];
+    state.metadata = primary.parsed.metadata;
+    state.headers = primary.parsed.headers;
+    state.rows = [];
+    state.files = [];
+    state.devices = [];
+  }
+
+  const compatibleTrendFiles = hasExistingTrend
+    ? trendFiles
+    : parsedFiles.filter((file) => headersMatch(file.parsed.headers, state.headers));
+
+  const mergedRows = [...state.rows];
+  compatibleTrendFiles.forEach((file) => {
+    mergedRows.push(...file.parsed.rows);
+    state.files.push(file.name);
+    addOrMergeDevice(file.device);
+  });
+  state.rows = sortRowsByTimeWithHeaders(mergedRows, state.headers);
+
+  const compareOnly = hasExistingTrend
+    ? compareOnlyFiles
+    : parsedFiles.filter((file) => !headersMatch(file.parsed.headers, state.headers));
+  compareOnly.forEach((file) => addOrMergeDevice(file.device));
+  if (compareOnly.length) {
+    console.info(`${compareOnly.length} CSV file(s) had different columns and were added to Compare only.`);
+  }
+
+  refreshCsvStateAfterLoad(previousSelected, previousUnits, hasExistingTrend);
 }
 
 function loadCsv(text, filename, append = false) {
@@ -355,7 +477,8 @@ function loadCsv(text, filename, append = false) {
     const sameHeaders = parsed.headers.length === state.headers.length
       && parsed.headers.every((header, index) => header === state.headers[index]);
     if (!sameHeaders) {
-      alert(`${filename} was not added because its columns do not match the loaded dataset.`);
+      addOrMergeDevice(device);
+      refreshCsvStateAfterLoad(previousSelected, previousUnits, true);
       return;
     }
 
@@ -370,22 +493,32 @@ function loadCsv(text, filename, append = false) {
     state.devices = [device];
   }
 
+  refreshCsvStateAfterLoad(previousSelected, previousUnits, append);
+}
+
+function refreshCsvStateAfterLoad(previousSelected, previousUnits, append) {
   state.columns = state.headers.map((header) => inferColumn(header, state.rows));
   state.selected = append && previousSelected.size
     ? new Set([...previousSelected].filter((header) => state.headers.includes(header)))
     : new Set(defaultSelectedColumns(state.columns));
+  if (!state.selected.size) state.selected = new Set(defaultSelectedColumns(state.columns));
   state.units = new Map();
   state.columns.forEach((column) => {
     state.units.set(column.header, previousUnits.get(column.header) ?? defaultUnit(column));
   });
   state.zoom = null;
-  if (!state.compare.signals.length || state.compare.signals.every((header) => !state.headers.includes(header))) {
+  const compareHeaders = new Set(commonCompareSignals().map((signal) => signal.header));
+  if (!state.compare.signals.length || state.compare.signals.every((header) => !compareHeaders.has(header))) {
     state.compare.signals = defaultCompareSignals();
     state.compare.signal = state.compare.signals[0] || "";
   }
-
   updateSubtitle();
   renderAll();
+}
+
+function headersMatch(headers, otherHeaders) {
+  return headers.length === otherHeaders.length
+    && headers.every((header, index) => header === otherHeaders[index]);
 }
 
 function createDeviceDataset(parsed, filename) {
@@ -788,6 +921,7 @@ function defaultSelectedColumns(columns) {
 }
 
 function renderAll() {
+  updateNavigationAvailability();
   renderStats();
   renderCompare();
   renderOperations();
@@ -2478,10 +2612,13 @@ function drawPlot() {
     ctx.beginPath();
     ctx.strokeStyle = item.color;
     ctx.lineWidth = 2;
+    const hitSampleStep = Math.max(1, Math.ceil(item.points.length / 1200));
     item.points.forEach((point, index) => {
       const x = margin.left + (point.x - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
       const y = margin.top + height - (point.y - yExtent[0]) / (yExtent[1] - yExtent[0]) * height;
-      state.hitPoints.push({ x, y, point, series: item });
+      if (index % hitSampleStep === 0 || index === item.points.length - 1) {
+        state.hitPoints.push({ x, y, point, series: item });
+      }
       if (index === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -3150,7 +3287,14 @@ function drawLegend(series, margin) {
 }
 
 function extent(values) {
-  return [Math.min(...values), Math.max(...values)];
+  let min = Infinity;
+  let max = -Infinity;
+  values.forEach((value) => {
+    if (!Number.isFinite(value)) return;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  });
+  return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : [NaN, NaN];
 }
 
 function clamp(value, min, max) {
@@ -3181,8 +3325,18 @@ function padTimeExtent(ext) {
 
 function summarize(values) {
   if (!values.length) return { min: NaN, max: NaN, mean: NaN };
-  const sum = values.reduce((total, value) => total + value, 0);
-  return { min: Math.min(...values), max: Math.max(...values), mean: sum / values.length };
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  let count = 0;
+  values.forEach((value) => {
+    if (!Number.isFinite(value)) return;
+    if (value < min) min = value;
+    if (value > max) max = value;
+    sum += value;
+    count += 1;
+  });
+  return count ? { min, max, mean: sum / count } : { min: NaN, max: NaN, mean: NaN };
 }
 
 function formatNumber(value) {
