@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Dashboard Plus</title>
-    <link rel="stylesheet" href="./styles.css?v=20260509-pptxlink" />
+    <link rel="stylesheet" href="./styles.css?v=20260509-guidelines" />
   </head>
   <body>
     <main class="app-shell">
@@ -89,6 +89,14 @@
                   <input id="operationsOverlayToggle" type="checkbox" checked />
                   <span>Operations overlay</span>
                 </label>
+                <label class="check-field">
+                  <input id="flowGuideToggle" data-flow-guide-toggle type="checkbox" />
+                  <span>Flow guide</span>
+                </label>
+                <label class="field compact-field flow-guide-field">
+                  Flow value
+                  <input id="flowGuideValue" data-flow-guide-value type="number" min="0" step="0.1" placeholder="GPM" disabled />
+                </label>
               </section>
 
               <section class="plot-area">
@@ -145,6 +153,14 @@
                 <option value="shared">Shared scale</option>
                 <option value="per-device">Per EV scale</option>
               </select>
+            </label>
+            <label class="check-field flow-guide-check">
+              <input id="compareFlowGuideToggle" data-flow-guide-toggle type="checkbox" />
+              <span>Flow guide</span>
+            </label>
+            <label class="field compact-field flow-guide-field">
+              Flow value
+              <input id="compareFlowGuideValue" data-flow-guide-value type="number" min="0" step="0.1" placeholder="GPM" disabled />
             </label>
           </section>
           <section class="panel wide">
@@ -363,7 +379,7 @@
         </section>
       </section>
     </main>
-    <script src="./vendor/pptxgen.min.js?v=20260509-pptxlink"></script>
-    <script src="./app.js?v=20260509-pptxlink"></script>
+    <script src="./vendor/pptxgen.min.js?v=20260509-guidelines"></script>
+    <script src="./app.js?v=20260509-guidelines"></script>
   </body>
 </html>

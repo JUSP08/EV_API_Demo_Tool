@@ -214,7 +214,7 @@ p {
 
 .control-strip {
   display: grid;
-  grid-template-columns: repeat(2, auto);
+  grid-template-columns: repeat(3, auto) minmax(130px, 170px);
   justify-content: start;
   align-items: end;
   gap: 12px;
@@ -222,7 +222,7 @@ p {
 
 .compare-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(190px, 1fr)) minmax(170px, 0.6fr) minmax(150px, 0.5fr);
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 12px;
   align-items: end;
 }
@@ -361,6 +361,10 @@ dd {
   height: 16px;
 }
 
+.flow-guide-check {
+  min-height: 35px;
+}
+
 select {
   width: 100%;
   min-width: 0;
@@ -373,6 +377,7 @@ select {
 
 input[type="text"],
 input[type="password"],
+input[type="number"],
 input[type="search"],
 textarea {
   width: 100%;
@@ -382,6 +387,19 @@ textarea {
   background: #111916;
   color: var(--ink);
   padding: 8px;
+}
+
+.compact-field {
+  font-size: 12px;
+}
+
+.compact-field input {
+  padding: 7px 8px;
+}
+
+.flow-guide-field input:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
 }
 
 input::placeholder,

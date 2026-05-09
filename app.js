@@ -110,6 +110,10 @@ const state = {
   units: new Map(),
   zoom: null,
   plotSearch: "",
+  flowGuide: {
+    enabled: false,
+    value: "",
+  },
   compare: {
     signal: "",
     signals: [],
@@ -137,6 +141,8 @@ const els = {
   datasetStats: document.getElementById("datasetStats"),
   statusOverlayToggle: document.getElementById("statusOverlayToggle"),
   operationsOverlayToggle: document.getElementById("operationsOverlayToggle"),
+  flowGuideToggles: document.querySelectorAll("[data-flow-guide-toggle]"),
+  flowGuideValues: document.querySelectorAll("[data-flow-guide-value]"),
   plotColumnList: document.getElementById("plotColumnList"),
   plotColumnSearch: document.getElementById("plotColumnSearch"),
   selectedPlotCount: document.getElementById("selectedPlotCount"),
@@ -237,6 +243,21 @@ els.resetZoomButton.addEventListener("click", () => {
 
 els.statusOverlayToggle.addEventListener("change", drawPlot);
 els.operationsOverlayToggle.addEventListener("change", drawPlot);
+els.flowGuideToggles.forEach((toggle) => {
+  toggle.addEventListener("change", () => {
+    state.flowGuide.enabled = toggle.checked;
+    syncFlowGuideControls();
+    redrawTrendAndCompare();
+  });
+});
+
+els.flowGuideValues.forEach((input) => {
+  input.addEventListener("input", () => {
+    state.flowGuide.value = input.value;
+    syncFlowGuideControls(input);
+    redrawTrendAndCompare();
+  });
+});
 
 els.plotColumnSearch.addEventListener("input", () => {
   state.plotSearch = els.plotColumnSearch.value.trim().toLowerCase();
@@ -303,6 +324,22 @@ els.tabButtons.forEach((button) => {
     activateTab(button.dataset.tab);
   });
 });
+
+function redrawTrendAndCompare() {
+  drawPlot();
+  requestAnimationFrame(() => drawComparePlots(compareRowsForSignals(selectedCompareSignals())));
+}
+
+function syncFlowGuideControls(sourceInput = null) {
+  els.flowGuideToggles.forEach((toggle) => {
+    toggle.checked = state.flowGuide.enabled;
+  });
+
+  els.flowGuideValues.forEach((input) => {
+    if (input !== sourceInput) input.value = state.flowGuide.value;
+    input.disabled = !state.flowGuide.enabled;
+  });
+}
 
 function activateTab(tab) {
   const button = [...els.tabButtons].find((item) => item.dataset.tab === tab && !item.hidden);
@@ -737,6 +774,7 @@ function resetDataset() {
   state.units = new Map();
   state.zoom = null;
   state.plotSearch = "";
+  state.flowGuide = { enabled: false, value: "" };
   state.compare = { signal: "", signals: [], alignment: "absolute", scale: "shared", expandedErrorDevices: new Set() };
   state.hitPoints = [];
   state.hitStatusEvents = [];
@@ -748,6 +786,7 @@ function resetDataset() {
   state.dragZoom = null;
   state.debug = emptyDebugState();
   els.plotColumnSearch.value = "";
+  syncFlowGuideControls();
   hideCompareTooltip();
   els.compareSignalSelect.innerHTML = "";
   els.compareSignalSelect2.innerHTML = "";
@@ -1614,6 +1653,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
     const yExtent = state.compare.scale === "shared" && sharedYByHeader[series.header]
       ? [...sharedYByHeader[series.header]]
       : extent(series.points.map((point) => point.y));
+    applySeriesGuideExtent(yExtent, [series]);
     padExtent(yExtent);
 
     local.strokeStyle = cssVar("--canvas-grid");
@@ -1630,7 +1670,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
 
     local.strokeStyle = cssVar("--canvas-axis");
     local.strokeRect(margin.left, top, plotW, laneH);
-    drawZeroGuideLine(local, margin.left, top, plotW, laneH, yExtent);
+    drawSeriesGuideLines(local, margin.left, top, plotW, laneH, yExtent, [series]);
     local.fillStyle = series.color;
     local.fillText(shorten(series.column.label, 34), margin.left + 8, top + 14);
     local.strokeStyle = series.color;
@@ -3092,12 +3132,13 @@ function drawPlot() {
     return;
   }
   const yExtent = visiblePoints.length ? extent(visiblePoints.map((point) => point.y)) : [0, 1];
+  applySeriesGuideExtent(yExtent, visibleSeries);
   padExtent(yExtent);
   state.plotBounds = { margin, width, height, xExtent, yExtent, fullXExtent };
 
   drawGapBands(margin, width, height, xExtent);
   drawGrid(margin, width, height, xExtent, yExtent);
-  drawZeroGuideLine(ctx, margin.left, margin.top, width, height, yExtent);
+  drawSeriesGuideLines(ctx, margin.left, margin.top, width, height, yExtent, visibleSeries);
 
   visibleSeries.forEach((item) => {
     ctx.beginPath();
@@ -3758,11 +3799,37 @@ function drawGrid(margin, width, height, xExtent, yExtent) {
   ctx.strokeRect(margin.left, margin.top, width, height);
 }
 
-function drawZeroGuideLine(targetCtx, left, top, width, height, yExtent) {
+function applySeriesGuideExtent(yExtent, series) {
   if (!Number.isFinite(yExtent[0]) || !Number.isFinite(yExtent[1])) return;
-  if (yExtent[0] > 0 || yExtent[1] < 0 || yExtent[0] === yExtent[1]) return;
+  if (series.some(isPercentageSeries)) {
+    yExtent[0] = Math.min(yExtent[0], 0);
+    yExtent[1] = Math.max(yExtent[1], 100);
+  }
 
-  const y = top + height - (0 - yExtent[0]) / (yExtent[1] - yExtent[0]) * height;
+  const flowValue = flowGuideValueForSeries(series);
+  if (Number.isFinite(flowValue)) {
+    yExtent[0] = Math.min(yExtent[0], flowValue);
+    yExtent[1] = Math.max(yExtent[1], flowValue);
+  }
+}
+
+function drawSeriesGuideLines(targetCtx, left, top, width, height, yExtent, series) {
+  drawGuideLine(targetCtx, left, top, width, height, yExtent, 0);
+  if (series.some(isPercentageSeries)) {
+    drawGuideLine(targetCtx, left, top, width, height, yExtent, 100);
+  }
+
+  const flowValue = flowGuideValueForSeries(series);
+  if (Number.isFinite(flowValue) && flowValue !== 0 && (!series.some(isPercentageSeries) || flowValue !== 100)) {
+    drawGuideLine(targetCtx, left, top, width, height, yExtent, flowValue);
+  }
+}
+
+function drawGuideLine(targetCtx, left, top, width, height, yExtent, value) {
+  if (!Number.isFinite(yExtent[0]) || !Number.isFinite(yExtent[1])) return;
+  if (!Number.isFinite(value) || yExtent[0] > value || yExtent[1] < value || yExtent[0] === yExtent[1]) return;
+
+  const y = top + height - (value - yExtent[0]) / (yExtent[1] - yExtent[0]) * height;
   targetCtx.save();
   targetCtx.beginPath();
   targetCtx.setLineDash([1.5, 5]);
@@ -3773,6 +3840,22 @@ function drawZeroGuideLine(targetCtx, left, top, width, height, yExtent) {
   targetCtx.lineTo(left + width, y);
   targetCtx.stroke();
   targetCtx.restore();
+}
+
+function isPercentageSeries(series) {
+  return String(series?.unit ?? series?.column?.unit ?? "") === "%";
+}
+
+function isAbsoluteWaterFlowSeries(series) {
+  const text = `${series?.header ?? ""} ${series?.column?.header ?? ""} ${series?.column?.label ?? ""}`.toLowerCase();
+  return text.includes("absolutewaterflow") && !text.includes("setpoint");
+}
+
+function flowGuideValueForSeries(series) {
+  if (!state.flowGuide.enabled || !series.some(isAbsoluteWaterFlowSeries)) return NaN;
+  if (String(state.flowGuide.value).trim() === "") return NaN;
+  const value = Number(state.flowGuide.value);
+  return Number.isFinite(value) ? value : NaN;
 }
 
 function drawLegend(series, margin) {
