@@ -1646,6 +1646,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
   local.fillRect(0, 0, width, height);
   local.font = "11px Inter, system-ui, sans-serif";
 
+  drawCompareNoErrorBands(local, row.device, margin, plotW, plotInnerH, xExtent);
   drawCompareGapBands(local, row.device, margin, plotW, plotInnerH, xExtent);
 
   row.series.forEach((series, laneIndex) => {
@@ -1935,37 +1936,43 @@ function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) 
     local.fillText(lane.bit, margin.left - 8, y + 13);
     local.textAlign = "left";
 
-    lane.segments
+    const visibleSegments = lane.segments
       .filter((segment) => segment.end >= xExtent[0] && segment.start <= xExtent[1])
-      .forEach((segment) => {
+      .map((segment) => {
         const start = Math.max(segment.start, xExtent[0]);
         const end = Math.min(segment.end, xExtent[1]);
         const x1 = margin.left + (start - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
         const x2 = margin.left + (end - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
-        const activeColor = lane.id === "errorState" && !segment.value ? "#35c2a6" : color;
-        local.fillStyle = activeColor;
-        local.globalAlpha = lane.id === "errorState" && !segment.value ? 0.42 : 0.84;
-        local.fillRect(x1, y + 3, Math.max(3, x2 - x1), laneHeight - 6);
-        local.globalAlpha = 1;
-
-        if (x2 - x1 > 42) {
-          local.fillStyle = "rgba(13, 20, 18, 0.78)";
-          local.fillRect(x1 + 3, y + 4, Math.min(Math.max(0, x2 - x1 - 6), 118), laneHeight - 8);
-          local.fillStyle = cssVar("--ink");
-          local.fillText(shorten(segment.label, 18), x1 + 7, y + 13);
-        }
-
-        state.compareStatusHits.push({
-          canvas: local.canvas,
-          row,
-          lane,
-          segment,
-          x1,
-          x2: Math.max(x2, x1 + 3),
-          y1: y + 2,
-          y2: y + laneHeight - 2,
-        });
+        return { segment, x1, x2 };
       });
+
+    visibleSegments.forEach(({ segment, x1, x2 }) => {
+      const isNoError = lane.id === "errorState" && !segment.value;
+      if (!isNoError) return;
+      local.fillStyle = "#35c2a6";
+      local.globalAlpha = 0.16;
+      local.fillRect(x1, y + 1, Math.max(3, x2 - x1), laneHeight - 2);
+      local.globalAlpha = 1;
+      pushCompareStatusHit(local, row, lane, segment, x1, x2, y, laneHeight);
+    });
+
+    visibleSegments.forEach(({ segment, x1, x2 }) => {
+      const isNoError = lane.id === "errorState" && !segment.value;
+      if (isNoError) return;
+      local.fillStyle = color;
+      local.globalAlpha = 0.84;
+      local.fillRect(x1, y + 3, Math.max(3, x2 - x1), laneHeight - 6);
+      local.globalAlpha = 1;
+
+      if (x2 - x1 > 42) {
+        local.fillStyle = "rgba(13, 20, 18, 0.78)";
+        local.fillRect(x1 + 3, y + 4, Math.min(Math.max(0, x2 - x1 - 6), 118), laneHeight - 8);
+        local.fillStyle = cssVar("--ink");
+        local.fillText(shorten(segment.label, 18), x1 + 7, y + 13);
+      }
+
+      pushCompareStatusHit(local, row, lane, segment, x1, x2, y, laneHeight);
+    });
 
     local.fillStyle = "rgba(13, 20, 18, 0.78)";
     local.fillRect(8, y + 2, margin.left - 16, laneHeight - 4);
@@ -1973,6 +1980,19 @@ function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) 
     local.fillText(shorten(lane.label, 18), 12, y + 13);
   });
   local.restore();
+}
+
+function pushCompareStatusHit(local, row, lane, segment, x1, x2, y, laneHeight) {
+  state.compareStatusHits.push({
+    canvas: local.canvas,
+    row,
+    lane,
+    segment,
+    x1,
+    x2: Math.max(x2, x1 + 3),
+    y1: y + 2,
+    y2: y + laneHeight - 2,
+  });
 }
 
 function handleComparePlotClick(event) {
@@ -3445,6 +3465,12 @@ function getCompareTimestampGaps(device) {
   }));
 }
 
+function getCompareNoErrorSegments(device) {
+  const lane = getCompareErrorStateLane(device);
+  if (!lane) return [];
+  return lane.segments.filter((segment) => !segment.value);
+}
+
 function drawGapBands(margin, width, height, xExtent) {
   const gaps = getTimestampGaps().filter((gap) => gap.end >= xExtent[0] && gap.start <= xExtent[1]);
   if (!gaps.length) return;
@@ -3459,6 +3485,22 @@ function drawGapBands(margin, width, height, xExtent) {
     ctx.fillRect(x1, margin.top, Math.max(2, x2 - x1), height);
   });
   ctx.restore();
+}
+
+function drawCompareNoErrorBands(local, device, margin, width, height, xExtent) {
+  const segments = getCompareNoErrorSegments(device).filter((segment) => segment.end >= xExtent[0] && segment.start <= xExtent[1]);
+  if (!segments.length) return;
+
+  local.save();
+  local.fillStyle = "rgba(53, 194, 166, 0.075)";
+  segments.forEach((segment) => {
+    const start = Math.max(segment.start, xExtent[0]);
+    const end = Math.min(segment.end, xExtent[1]);
+    const x1 = margin.left + (start - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+    const x2 = margin.left + (end - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+    local.fillRect(x1, margin.top, Math.max(2, x2 - x1), height);
+  });
+  local.restore();
 }
 
 function drawCompareGapBands(local, device, margin, width, height, xExtent) {
