@@ -14,6 +14,8 @@ const OPERATION_COLORS = {
 };
 const GAP_THRESHOLD_SECONDS = 40;
 const CONTROL_MODE_COLUMN_INDEX = 17;
+const COMPARE_CANVAS_BASE_HEIGHT = 518;
+const COMPARE_STATUS_LANE_STEP = 22;
 const CONTROL_MODE_LABELS = new Map([
   [0, "Position"],
   [1, "Flow"],
@@ -113,6 +115,7 @@ const state = {
     signals: [],
     alignment: "absolute",
     scale: "shared",
+    expandedErrorDevices: new Set(),
   },
   hitPoints: [],
   hitStatusEvents: [],
@@ -162,6 +165,7 @@ const els = {
   comparePlots: document.getElementById("comparePlots"),
   compareTooltip: document.getElementById("compareTooltip"),
   exportComparePdfButton: document.getElementById("exportComparePdfButton"),
+  exportComparePptButton: document.getElementById("exportComparePptButton"),
   operationsStats: document.getElementById("operationsStats"),
   insightSummary: document.getElementById("insightSummary"),
   eventSummary: document.getElementById("eventSummary"),
@@ -267,8 +271,11 @@ els.exportComparePdfButton.addEventListener("click", () => {
   window.print();
 });
 
+els.exportComparePptButton.addEventListener("click", exportComparePowerPoint);
+
 els.comparePlots.addEventListener("mousemove", handleCompareHover);
 els.comparePlots.addEventListener("mouseleave", hideCompareTooltip);
+els.comparePlots.addEventListener("click", handleComparePlotClick);
 
 els.buildAiPayloadButton.addEventListener("click", () => {
   renderAiPayloadPreview();
@@ -728,7 +735,7 @@ function resetDataset() {
   state.units = new Map();
   state.zoom = null;
   state.plotSearch = "";
-  state.compare = { signal: "", signals: [], alignment: "absolute", scale: "shared" };
+  state.compare = { signal: "", signals: [], alignment: "absolute", scale: "shared", expandedErrorDevices: new Set() };
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
@@ -1056,18 +1063,67 @@ function renderCompare() {
   const rows = compareRowsForSignals(selectedCompareSignals());
   els.compareSummary.className = "summary-list";
   els.compareSummary.innerHTML = renderCompareSummary(rows);
-  els.comparePlots.innerHTML = rows.map((row, index) => `
-    <div class="compare-row">
-      <div class="compare-meta">
-        <strong>${escapeHtml(row.device.name)}</strong>
-        <span>${row.device.files.length.toLocaleString()} file${row.device.files.length === 1 ? "" : "s"}</span>
-        <span>${row.points.length.toLocaleString()} samples</span>
-        <span>${row.rangeLabel}</span>
+  els.comparePlots.innerHTML = rows.map((row, index) => {
+    const errorDetailLanes = getCompareErrorDetailLanes(row.device);
+    const errorExpanded = isCompareErrorExpanded(row.device);
+    const canvasHeight = compareCanvasHeight(row.device);
+    return `
+      <div class="compare-row">
+        <div class="compare-meta">
+          <strong>${escapeHtml(`Serial: ${row.device.name}`)}</strong>
+          <span class="compare-file-line" title="${escapeAttr(compareFullFileLabel(row.device))}">${escapeHtml(compareFileLabel(row.device))}</span>
+          <span>${escapeHtml(`Samples: ${row.points.length.toLocaleString()}`)}</span>
+          <span>${escapeHtml(`Date: ${row.rangeLabel}`)}</span>
+          ${errorDetailLanes.length ? `
+            <button class="compare-expand-button" type="button" data-device-id="${escapeAttr(row.device.id)}" aria-expanded="${errorExpanded ? "true" : "false"}">
+              <span class="compare-caret" aria-hidden="true"></span>
+              <span>Error detail</span>
+              <span>${errorDetailLanes.length}</span>
+            </button>
+          ` : ""}
+        </div>
+        <canvas class="compare-canvas" data-compare-index="${index}" height="${canvasHeight}" style="--compare-canvas-height: ${canvasHeight}px"></canvas>
       </div>
-      <canvas class="compare-canvas" data-compare-index="${index}" height="330"></canvas>
-    </div>
-  `).join("");
+    `;
+  }).join("");
   requestAnimationFrame(() => drawComparePlots(rows));
+}
+
+function compareExpandedErrorDevices() {
+  if (!(state.compare.expandedErrorDevices instanceof Set)) {
+    state.compare.expandedErrorDevices = new Set();
+  }
+  return state.compare.expandedErrorDevices;
+}
+
+function isCompareErrorExpanded(device) {
+  return compareExpandedErrorDevices().has(device.id);
+}
+
+function compareCanvasHeight(device) {
+  const expandedLaneCount = isCompareErrorExpanded(device) ? getCompareErrorDetailLanes(device).length : 0;
+  return COMPARE_CANVAS_BASE_HEIGHT + expandedLaneCount * COMPARE_STATUS_LANE_STEP;
+}
+
+function compareFileLabel(device) {
+  const files = [...new Set(device.files)];
+  if (!files.length) return "File: n/a";
+  if (files.length === 1) return `File: ${files[0]}`;
+  return `Files: ${files[0]} +${files.length - 1} more`;
+}
+
+function compareFullFileLabel(device) {
+  const files = [...new Set(device.files)];
+  return files.length ? `Files: ${files.join(", ")}` : "Files: n/a";
+}
+
+function compareReportMetaLine(row) {
+  return [
+    `Serial: ${row.device.name}`,
+    compareFileLabel(row.device),
+    `Samples: ${row.points.length.toLocaleString()}`,
+    `Date: ${row.rangeLabel}`,
+  ].join(" | ");
 }
 
 function prepareComparePrint() {
@@ -1081,6 +1137,234 @@ function prepareComparePrint() {
     new Date().toLocaleString(),
   ].join(" | ");
   drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+}
+
+async function exportComparePowerPoint() {
+  const rows = compareRowsForSignals(selectedCompareSignals());
+  if (!rows.length) {
+    alert("Load two or more EV trend CSVs and select at least one common signal before exporting PowerPoint.");
+    return;
+  }
+
+  const originalText = els.exportComparePptButton.textContent;
+  els.exportComparePptButton.disabled = true;
+  els.exportComparePptButton.textContent = "Building PPTX...";
+
+  try {
+    drawComparePlots(rows);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const canvases = [...document.querySelectorAll(".compare-canvas")];
+    const slides = rows.map((row, index) => {
+      const canvas = canvases[index];
+      if (!canvas) return null;
+      return {
+        title: "EV Trend Comparison",
+        meta: compareReportMetaLine(row),
+        imageBytes: dataUrlToBytes(canvas.toDataURL("image/png")),
+      };
+    }).filter(Boolean);
+
+    if (!slides.length) throw new Error("No Compare graph canvases were available to export.");
+    const blob = createComparePptx(slides);
+    downloadBlob(blob, `ev-trend-comparison-${fileDateStamp()}.pptx`);
+  } catch (error) {
+    console.error(error);
+    alert(`PowerPoint export failed: ${error.message}`);
+  } finally {
+    els.exportComparePptButton.disabled = false;
+    els.exportComparePptButton.textContent = originalText;
+  }
+}
+
+function createComparePptx(slides) {
+  const entries = [];
+  const addText = (name, text) => entries.push({ name, data: encodeUtf8(text) });
+  const addBytes = (name, data) => entries.push({ name, data });
+
+  addText("[Content_Types].xml", pptContentTypesXml(slides.length));
+  addText("_rels/.rels", pptRootRelsXml());
+  addText("docProps/core.xml", pptCoreXml());
+  addText("docProps/app.xml", pptAppXml(slides.length));
+  addText("ppt/presentation.xml", pptPresentationXml(slides.length));
+  addText("ppt/_rels/presentation.xml.rels", pptPresentationRelsXml(slides.length));
+  addText("ppt/slideMasters/slideMaster1.xml", pptSlideMasterXml());
+  addText("ppt/slideMasters/_rels/slideMaster1.xml.rels", pptSlideMasterRelsXml());
+  addText("ppt/slideLayouts/slideLayout1.xml", pptSlideLayoutXml());
+  addText("ppt/slideLayouts/_rels/slideLayout1.xml.rels", pptSlideLayoutRelsXml());
+  addText("ppt/theme/theme1.xml", pptThemeXml());
+
+  slides.forEach((slide, index) => {
+    const slideNumber = index + 1;
+    addText(`ppt/slides/slide${slideNumber}.xml`, pptSlideXml(slide, slideNumber));
+    addText(`ppt/slides/_rels/slide${slideNumber}.xml.rels`, pptSlideRelsXml(slideNumber));
+    addBytes(`ppt/media/image${slideNumber}.png`, slide.imageBytes);
+  });
+
+  return createZipBlob(entries, "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+}
+
+function pptContentTypesXml(slideCount) {
+  const slideOverrides = Array.from({ length: slideCount }, (_, index) => `
+  <Override PartName="/ppt/slides/slide${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>${slideOverrides}
+</Types>`;
+}
+
+function pptRootRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+}
+
+function pptCoreXml() {
+  const now = new Date().toISOString();
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>EV Trend Comparison</dc:title>
+  <dc:creator>Dashboard Plus</dc:creator>
+  <cp:lastModifiedBy>Dashboard Plus</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
+function pptAppXml(slideCount) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Dashboard Plus</Application>
+  <PresentationFormat>On-screen Show (16:9)</PresentationFormat>
+  <Slides>${slideCount}</Slides>
+</Properties>`;
+}
+
+function pptPresentationXml(slideCount) {
+  const slideIds = Array.from({ length: slideCount }, (_, index) => `
+    <p:sldId id="${256 + index}" r:id="rId${index + 2}"/>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1">
+  <p:sldMasterIdLst>
+    <p:sldMasterId id="2147483648" r:id="rId1"/>
+  </p:sldMasterIdLst>
+  <p:sldIdLst>${slideIds}
+  </p:sldIdLst>
+  <p:sldSz cx="12192000" cy="6858000" type="screen16x9"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>`;
+}
+
+function pptPresentationRelsXml(slideCount) {
+  const slideRels = Array.from({ length: slideCount }, (_, index) => `
+  <Relationship Id="rId${index + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${index + 1}.xml"/>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>${slideRels}
+</Relationships>`;
+}
+
+function pptSlideXml(slide, slideNumber) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:bg><p:bgPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      ${pptTextShape(2, "Title", slide.title, 365760, 182880, 11460480, 320040, 1800, true)}
+      ${pptTextShape(3, "Trend metadata", slide.meta, 365760, 548640, 11460480, 228600, 900, false)}
+      <p:pic>
+        <p:nvPicPr><p:cNvPr id="4" name="EV trend graph ${slideNumber}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
+        <p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+        <p:spPr><a:xfrm><a:off x="365760" y="914400"/><a:ext cx="11460480" cy="5486400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+      </p:pic>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>`;
+}
+
+function pptTextShape(id, name, text, x, y, cx, cy, fontSize, bold) {
+  return `<p:sp>
+        <p:nvSpPr><p:cNvPr id="${id}" name="${escapeHtml(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>
+        <p:txBody><a:bodyPr wrap="none" rtlCol="0"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="${fontSize}"${bold ? ' b="1"' : ""}><a:solidFill><a:srgbClr val="20312D"/></a:solidFill><a:latin typeface="Arial"/></a:rPr><a:t>${escapeHtml(text)}</a:t></a:r><a:endParaRPr lang="en-US" sz="${fontSize}"/></a:p></p:txBody>
+      </p:sp>`;
+}
+
+function pptSlideRelsXml(slideNumber) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${slideNumber}.png"/>
+</Relationships>`;
+}
+
+function pptSlideMasterXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>
+  <p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>
+</p:sldMaster>`;
+}
+
+function pptSlideMasterRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>`;
+}
+
+function pptSlideLayoutXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1">
+  <p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>`;
+}
+
+function pptSlideLayoutRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>`;
+}
+
+function pptThemeXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Dashboard Plus">
+  <a:themeElements>
+    <a:clrScheme name="Dashboard Plus">
+      <a:dk1><a:srgbClr val="20312D"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="4F625C"/></a:dk2><a:lt2><a:srgbClr val="F5F8F7"/></a:lt2>
+      <a:accent1><a:srgbClr val="35C2A6"/></a:accent1><a:accent2><a:srgbClr val="5EA1D8"/></a:accent2>
+      <a:accent3><a:srgbClr val="E0A04B"/></a:accent3><a:accent4><a:srgbClr val="B09ADE"/></a:accent4>
+      <a:accent5><a:srgbClr val="DF7FA2"/></a:accent5><a:accent6><a:srgbClr val="A0B96D"/></a:accent6>
+      <a:hlink><a:srgbClr val="5EA1D8"/></a:hlink><a:folHlink><a:srgbClr val="B09ADE"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Dashboard Plus"><a:majorFont><a:latin typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/></a:minorFont></a:fontScheme>
+    <a:fmtScheme name="Dashboard Plus">
+      <a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
+      <a:lnStyleLst><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst>
+      <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>
+      <a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+  <a:objectDefaults/><a:extraClrSchemeLst/>
+</a:theme>`;
 }
 
 function renderCompareSignalSelect(select, signals, selected, allowNone) {
@@ -1273,6 +1557,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
 
     local.strokeStyle = cssVar("--canvas-axis");
     local.strokeRect(margin.left, top, plotW, laneH);
+    drawZeroGuideLine(local, margin.left, top, plotW, laneH, yExtent);
     local.fillStyle = series.color;
     local.fillText(shorten(series.column.label, 34), margin.left + 8, top + 14);
     local.strokeStyle = series.color;
@@ -1310,7 +1595,11 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
 }
 
 function getCompareStatusLanes(device) {
-  return [getCompareControlModeLane(device), getCompareErrorStateLane(device)].filter(Boolean);
+  const lanes = [getCompareControlModeLane(device), getCompareErrorStateLane(device)].filter(Boolean);
+  if (lanes.some((lane) => lane.id === "errorState") && isCompareErrorExpanded(device)) {
+    lanes.push(...getCompareErrorDetailLanes(device));
+  }
+  return lanes;
 }
 
 function getCompareControlModeLane(device) {
@@ -1347,6 +1636,114 @@ function getCompareErrorStateLane(device) {
   }).filter(Boolean);
   const segments = buildCompareStateSegments(samples);
   return segments.length ? { id: "errorState", bit: "ERR", label: "Error state", segments } : null;
+}
+
+function getCompareErrorDetailLanes(device) {
+  const column = findCompareErrorStateColumn(device);
+  if (!column) return [];
+  const baseTime = firstDeviceTime(device);
+  const samples = device.rows.map((dataRow) => {
+    const time = parseTimestamp(dataRow["Timestamp - UTC"]);
+    const value = Number(dataRow[column.header]);
+    if (!Number.isFinite(time) || !Number.isFinite(value)) return null;
+    return {
+      time: compareStatusTime(time, baseTime),
+      value,
+    };
+  }).filter(Boolean);
+
+  if (column.bitMap.length) {
+    return column.bitMap.map((bit) => {
+      const segments = buildCompareBitSegments(samples, bit);
+      return {
+        id: `errorBit:${bit.bit}`,
+        kind: "errorBit",
+        bit: `B${bit.bit}`,
+        bitNumber: bit.bit,
+        label: bit.label,
+        segments,
+      };
+    }).filter((lane) => lane.segments.length);
+  }
+
+  const values = [...new Set(samples.map((sample) => sample.value))]
+    .filter((value) => value !== 0)
+    .sort((a, b) => a - b);
+  return values.map((value, index) => {
+    const label = errorStateLabel(column, value);
+    const segments = buildCompareValueSegments(samples, value, label);
+    return {
+      id: `errorValue:${value}`,
+      kind: "errorValue",
+      bit: `S${index + 1}`,
+      value,
+      label,
+      segments,
+    };
+  }).filter((lane) => lane.segments.length);
+}
+
+function buildCompareBitSegments(samples, bit) {
+  const segments = [];
+  let activeStart = null;
+  let activeValue = null;
+
+  samples.forEach((sample, index) => {
+    const active = maskHasBit(sample.value, bit.bit);
+    const next = samples[index + 1];
+    const nextActive = next ? maskHasBit(next.value, bit.bit) : false;
+    if (active && activeStart === null) {
+      activeStart = sample.time;
+      activeValue = sample.value;
+    }
+
+    if (activeStart !== null && (!nextActive || !next)) {
+      const end = next ? next.time : Math.max(sample.time, activeStart + 1);
+      if (end > activeStart) {
+        segments.push({
+          start: activeStart,
+          end,
+          value: activeValue ?? sample.value,
+          label: bit.label,
+        });
+      }
+      activeStart = null;
+      activeValue = null;
+    }
+  });
+
+  return segments;
+}
+
+function maskHasBit(mask, bit) {
+  return Math.floor(mask / (2 ** bit)) % 2 === 1;
+}
+
+function buildCompareValueSegments(samples, value, label) {
+  const segments = [];
+  let activeStart = null;
+
+  samples.forEach((sample, index) => {
+    const active = sample.value === value;
+    const next = samples[index + 1];
+    const nextActive = next ? next.value === value : false;
+    if (active && activeStart === null) activeStart = sample.time;
+
+    if (activeStart !== null && (!nextActive || !next)) {
+      const end = next ? next.time : Math.max(sample.time, activeStart + 1);
+      if (end > activeStart) {
+        segments.push({
+          start: activeStart,
+          end,
+          value,
+          label,
+        });
+      }
+      activeStart = null;
+    }
+  });
+
+  return segments;
 }
 
 function buildCompareStateSegments(samples) {
@@ -1405,7 +1802,7 @@ function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) 
   if (!lanes.length) return;
   const laneHeight = 18;
   const laneGap = 4;
-  const colors = ["#e0a04b", "#ec6b62"];
+  const colors = ["#e0a04b", "#ec6b62", "#df7fa2", "#b09ade", "#5ea1d8", "#a0b96d", "#d0825d"];
 
   local.save();
   local.font = "11px Inter, system-ui, sans-serif";
@@ -1414,7 +1811,9 @@ function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) 
 
   lanes.forEach((lane, laneIndex) => {
     const y = top + laneIndex * (laneHeight + laneGap);
-    const color = colors[laneIndex % colors.length];
+    const color = lane.id === "controlMode"
+      ? "#e0a04b"
+      : lane.id === "errorState" ? "#ec6b62" : colors[laneIndex % colors.length];
     local.fillStyle = cssVar("--panel-soft");
     local.fillRect(margin.left, y, width, laneHeight);
 
@@ -1461,6 +1860,19 @@ function drawCompareStatusBands(local, row, lanes, margin, width, top, xExtent) 
     local.fillText(shorten(lane.label, 18), 12, y + 13);
   });
   local.restore();
+}
+
+function handleComparePlotClick(event) {
+  const button = event.target.closest?.(".compare-expand-button");
+  if (!button) return;
+  const deviceId = button.dataset.deviceId;
+  if (!deviceId) return;
+
+  const expanded = compareExpandedErrorDevices();
+  if (expanded.has(deviceId)) expanded.delete(deviceId);
+  else expanded.add(deviceId);
+  hideCompareTooltip();
+  renderCompare();
 }
 
 function handleCompareHover(event) {
@@ -1521,13 +1933,18 @@ function showCompareStatusTooltip(hit, canvasRect) {
   const wrapRect = els.comparePlots.parentElement.getBoundingClientRect();
   const startLabel = formatCompareStatusTime(hit.segment.start);
   const endLabel = formatCompareStatusTime(hit.segment.end);
-  const valueLabel = hit.lane.id === "controlMode" ? "Mode" : "Decoded state";
+  const valueLabel = hit.lane.id === "controlMode"
+    ? "Mode"
+    : hit.lane.kind === "errorBit" ? "Error bit" : "Decoded state";
+  const rawLabel = hit.lane.kind === "errorBit"
+    ? `Bit ${hit.lane.bitNumber}; mask sample ${hit.segment.value}`
+    : `Raw: ${hit.segment.value}`;
   els.compareTooltip.innerHTML = `
     <strong>${escapeHtml(hit.lane.label)}</strong>
     <span>${escapeHtml(hit.row.device.name)}</span>
     <span>${escapeHtml(`${startLabel} to ${endLabel}`)}</span>
     <span>${escapeHtml(`${valueLabel}: ${hit.segment.label}`)}</span>
-    <span>${escapeHtml(`Raw: ${hit.segment.value}`)}</span>
+    <span>${escapeHtml(rawLabel)}</span>
   `;
   const localLeft = canvasRect.left - wrapRect.left + Math.min(hit.x2 - 10, Math.max(hit.x1 + 12, (hit.x1 + hit.x2) / 2));
   const localTop = canvasRect.top - wrapRect.top + hit.y1 - 72;
@@ -2607,6 +3024,7 @@ function drawPlot() {
 
   drawGapBands(margin, width, height, xExtent);
   drawGrid(margin, width, height, xExtent, yExtent);
+  drawZeroGuideLine(ctx, margin.left, margin.top, width, height, yExtent);
 
   visibleSeries.forEach((item) => {
     ctx.beginPath();
@@ -3267,6 +3685,23 @@ function drawGrid(margin, width, height, xExtent, yExtent) {
   ctx.strokeRect(margin.left, margin.top, width, height);
 }
 
+function drawZeroGuideLine(targetCtx, left, top, width, height, yExtent) {
+  if (!Number.isFinite(yExtent[0]) || !Number.isFinite(yExtent[1])) return;
+  if (yExtent[0] > 0 || yExtent[1] < 0 || yExtent[0] === yExtent[1]) return;
+
+  const y = top + height - (0 - yExtent[0]) / (yExtent[1] - yExtent[0]) * height;
+  targetCtx.save();
+  targetCtx.beginPath();
+  targetCtx.setLineDash([1.5, 5]);
+  targetCtx.lineCap = "round";
+  targetCtx.strokeStyle = "rgba(255, 255, 255, 0.42)";
+  targetCtx.lineWidth = 1;
+  targetCtx.moveTo(left, y);
+  targetCtx.lineTo(left + width, y);
+  targetCtx.stroke();
+  targetCtx.restore();
+}
+
 function drawLegend(series, margin) {
   let x = margin.left;
   let y = 17;
@@ -3426,6 +3861,124 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function encodeUtf8(text) {
+  return new TextEncoder().encode(text);
+}
+
+function dataUrlToBytes(dataUrl) {
+  const base64 = dataUrl.split(",")[1] ?? "";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function fileDateStamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+function createZipBlob(entries, mimeType) {
+  const parts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  entries.forEach((entry) => {
+    const nameBytes = encodeUtf8(entry.name);
+    const data = entry.data;
+    const crc = crc32(data);
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(localHeader.buffer);
+
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, 0, true);
+    localView.setUint16(12, 0, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, data.length, true);
+    localView.setUint32(22, data.length, true);
+    localView.setUint16(26, nameBytes.length, true);
+    localView.setUint16(28, 0, true);
+    localHeader.set(nameBytes, 30);
+
+    parts.push(localHeader, data);
+
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(centralHeader.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, 0, true);
+    centralView.setUint16(14, 0, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, data.length, true);
+    centralView.setUint32(24, data.length, true);
+    centralView.setUint16(28, nameBytes.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    centralHeader.set(nameBytes, 46);
+    centralParts.push(centralHeader);
+
+    offset += localHeader.length + data.length;
+  });
+
+  const centralOffset = offset;
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const endHeader = new Uint8Array(22);
+  const endView = new DataView(endHeader.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, entries.length, true);
+  endView.setUint16(10, entries.length, true);
+  endView.setUint32(12, centralSize, true);
+  endView.setUint32(16, centralOffset, true);
+  endView.setUint16(20, 0, true);
+
+  return new Blob([...parts, ...centralParts, endHeader], { type: mimeType });
+}
+
+let crcTable = null;
+
+function crc32(bytes) {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256);
+    for (let index = 0; index < 256; index += 1) {
+      let value = index;
+      for (let bit = 0; bit < 8; bit += 1) {
+        value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      }
+      crcTable[index] = value >>> 0;
+    }
+  }
+
+  let crc = 0xffffffff;
+  bytes.forEach((byte) => {
+    crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 renderAll();
