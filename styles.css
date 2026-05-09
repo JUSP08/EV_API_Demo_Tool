@@ -430,6 +430,39 @@ textarea {
   gap: 8px;
 }
 
+.export-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 0;
+  position: sticky;
+  top: 8px;
+  z-index: 6;
+  margin: 0 0 12px;
+  padding: 9px 10px;
+  border: 1px solid rgba(53, 194, 166, 0.42);
+  border-radius: 8px;
+  background: rgba(18, 27, 24, 0.96);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.26);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.export-status:empty {
+  display: none;
+}
+
+.export-status a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.export-status a:hover {
+  text-decoration: underline;
+}
+
 .picker-actions {
   display: grid;
   gap: 8px;
@@ -968,6 +1001,7 @@ canvas {
   .plot-picker,
   .control-strip,
   .toolbar,
+  .export-status,
   .compare-expand-button,
   .print-hide {
     display: none !important;

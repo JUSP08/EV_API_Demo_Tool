@@ -122,6 +122,7 @@ const state = {
   hitOperationEvents: [],
   compareHitPoints: [],
   compareStatusHits: [],
+  compareExport: null,
   plotBounds: null,
   dragZoom: null,
   debug: emptyDebugState(),
@@ -166,6 +167,7 @@ const els = {
   compareTooltip: document.getElementById("compareTooltip"),
   exportComparePdfButton: document.getElementById("exportComparePdfButton"),
   exportComparePptButton: document.getElementById("exportComparePptButton"),
+  compareExportStatus: document.getElementById("compareExportStatus"),
   operationsStats: document.getElementById("operationsStats"),
   insightSummary: document.getElementById("insightSummary"),
   eventSummary: document.getElementById("eventSummary"),
@@ -741,6 +743,7 @@ function resetDataset() {
   state.hitOperationEvents = [];
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.compareExport = null;
   state.plotBounds = null;
   state.dragZoom = null;
   state.debug = emptyDebugState();
@@ -1140,6 +1143,7 @@ function prepareComparePrint() {
 }
 
 async function exportComparePowerPoint() {
+  clearCompareExportStatus();
   const rows = compareRowsForSignals(selectedCompareSignals());
   if (!rows.length) {
     alert("Load two or more EV trend CSVs and select at least one common signal before exporting PowerPoint.");
@@ -1153,6 +1157,11 @@ async function exportComparePowerPoint() {
   try {
     drawComparePlots(rows);
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (window.PptxGenJS && window.JSZip) {
+      await exportComparePowerPointWithLibrary(rows);
+      return;
+    }
+
     const canvases = [...document.querySelectorAll(".compare-canvas")];
     const slides = rows.map((row, index) => {
       const canvas = canvases[index];
@@ -1166,7 +1175,9 @@ async function exportComparePowerPoint() {
 
     if (!slides.length) throw new Error("No Compare graph canvases were available to export.");
     const blob = createComparePptx(slides);
-    downloadBlob(blob, `ev-trend-comparison-${fileDateStamp()}.pptx`);
+    const filename = `ev-trend-comparison-${fileDateStamp()}.pptx`;
+    downloadBlob(blob, filename);
+    showCompareExportStatus(blob, filename);
   } catch (error) {
     console.error(error);
     alert(`PowerPoint export failed: ${error.message}`);
@@ -1174,6 +1185,67 @@ async function exportComparePowerPoint() {
     els.exportComparePptButton.disabled = false;
     els.exportComparePptButton.textContent = originalText;
   }
+}
+
+async function exportComparePowerPointWithLibrary(rows) {
+  const pptx = new PptxGenJS();
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.author = "Dashboard Plus";
+  pptx.company = "Dashboard Plus";
+  pptx.subject = "EV Trend Comparison";
+  pptx.title = "EV Trend Comparison";
+  pptx.lang = "en-US";
+  pptx.theme = {
+    headFontFace: "Arial",
+    bodyFontFace: "Arial",
+    lang: "en-US",
+  };
+
+  const canvases = [...document.querySelectorAll(".compare-canvas")];
+  rows.forEach((row, index) => {
+    const canvas = canvases[index];
+    if (!canvas) return;
+    const slide = pptx.addSlide();
+    slide.background = { color: "FFFFFF" };
+    slide.addText("EV Trend Comparison", {
+      x: 0.3,
+      y: 0.16,
+      w: 12.72,
+      h: 0.3,
+      margin: 0,
+      fontFace: "Arial",
+      fontSize: 18,
+      bold: true,
+      color: "20312D",
+      breakLine: false,
+    });
+    slide.addText(compareReportMetaLine(row), {
+      x: 0.3,
+      y: 0.53,
+      w: 12.72,
+      h: 0.25,
+      margin: 0,
+      fontFace: "Arial",
+      fontSize: 8.5,
+      color: "4F625C",
+      breakLine: false,
+    });
+    slide.addImage({
+      data: canvas.toDataURL("image/png"),
+      x: 0.3,
+      y: 0.86,
+      w: 12.72,
+      h: 6.34,
+    });
+  });
+
+  const filename = `ev-trend-comparison-${fileDateStamp()}.pptx`;
+  const output = await pptx.write({ outputType: "blob" });
+  const blob = output instanceof Blob
+    ? output
+    : new Blob([output], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+  downloadBlob(blob, filename);
+  showCompareExportStatus(blob, filename);
 }
 
 function createComparePptx(slides) {
@@ -1286,7 +1358,7 @@ function pptSlideXml(slide, slideNumber) {
       ${pptTextShape(3, "Trend metadata", slide.meta, 365760, 548640, 11460480, 228600, 900, false)}
       <p:pic>
         <p:nvPicPr><p:cNvPr id="4" name="EV trend graph ${slideNumber}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
-        <p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+        <p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
         <p:spPr><a:xfrm><a:off x="365760" y="914400"/><a:ext cx="11460480" cy="5486400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
       </p:pic>
     </p:spTree>
@@ -1306,7 +1378,8 @@ function pptTextShape(id, name, text, x, y, cx, cy, fontSize, bold) {
 function pptSlideRelsXml(slideNumber) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${slideNumber}.png"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${slideNumber}.png"/>
 </Relationships>`;
 }
 
@@ -3886,6 +3959,32 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showCompareExportStatus(blob, filename) {
+  if (!els.compareExportStatus) return;
+  clearCompareExportStatus();
+  const url = URL.createObjectURL(blob);
+  state.compareExport = { blob, filename, url };
+  els.compareExportStatus.innerHTML = `
+    <strong>PPTX ready</strong>
+    <span>If the download did not start, use this link:</span>
+    <a href="${escapeAttr(url)}" download="${escapeAttr(filename)}">Download ${escapeHtml(filename)}</a>
+  `;
+  window.setTimeout(() => {
+    if (state.compareExport?.url === url) {
+      URL.revokeObjectURL(url);
+      clearCompareExportStatus();
+    }
+  }, 5 * 60 * 1000);
+}
+
+function clearCompareExportStatus() {
+  if (!els.compareExportStatus) return;
+  const link = els.compareExportStatus.querySelector("a");
+  if (link?.href?.startsWith("blob:")) URL.revokeObjectURL(link.href);
+  state.compareExport = null;
+  els.compareExportStatus.innerHTML = "";
 }
 
 function fileDateStamp() {
