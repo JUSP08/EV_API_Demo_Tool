@@ -118,6 +118,7 @@ const state = {
   compare: {
     signal: "",
     signals: [],
+    hoverIndexes: new Set([0, 1, 2]),
     alignment: "absolute",
     scale: "shared",
     expandedErrorDevices: new Set(),
@@ -166,6 +167,7 @@ const els = {
   compareSignalSelect: document.getElementById("compareSignalSelect"),
   compareSignalSelect2: document.getElementById("compareSignalSelect2"),
   compareSignalSelect3: document.getElementById("compareSignalSelect3"),
+  compareHoverToggles: document.querySelectorAll("[data-compare-hover-index]"),
   compareAlignmentSelect: document.getElementById("compareAlignmentSelect"),
   compareScaleSelect: document.getElementById("compareScaleSelect"),
   compareDeviceCount: document.getElementById("compareDeviceCount"),
@@ -278,7 +280,18 @@ els.recommendedPlotButton.addEventListener("click", () => {
   select.addEventListener("change", () => {
     state.compare.signals[index] = select.value;
     state.compare.signal = state.compare.signals[0] || "";
+    if (select.value) compareHoverIndexes().add(index);
+    else compareHoverIndexes().delete(index);
     renderCompare();
+  });
+});
+
+els.compareHoverToggles.forEach((input) => {
+  input.addEventListener("change", () => {
+    const index = Number(input.dataset.compareHoverIndex);
+    if (input.checked) compareHoverIndexes().add(index);
+    else compareHoverIndexes().delete(index);
+    hideCompareTooltip();
   });
 });
 
@@ -332,6 +345,22 @@ els.tabButtons.forEach((button) => {
 function redrawTrendAndCompare() {
   drawPlot();
   requestAnimationFrame(() => drawComparePlots(compareRowsForSignals(selectedCompareSignals())));
+}
+
+function compareHoverIndexes() {
+  if (!(state.compare.hoverIndexes instanceof Set)) {
+    state.compare.hoverIndexes = new Set([0, 1, 2]);
+  }
+  return state.compare.hoverIndexes;
+}
+
+function syncCompareHoverControls() {
+  const hoverIndexes = compareHoverIndexes();
+  els.compareHoverToggles.forEach((input) => {
+    const index = Number(input.dataset.compareHoverIndex);
+    input.checked = hoverIndexes.has(index) && Boolean(state.compare.signals[index]);
+    input.disabled = !state.compare.signals[index];
+  });
 }
 
 function syncFlowGuideControls(sourceInput = null) {
@@ -786,7 +815,7 @@ function resetDataset() {
   state.zoom = null;
   state.plotSearch = "";
   state.flowGuide = { enabled: false, value: "" };
-  state.compare = { signal: "", signals: [], alignment: "absolute", scale: "shared", expandedErrorDevices: new Set() };
+  state.compare = { signal: "", signals: [], hoverIndexes: new Set([0, 1, 2]), alignment: "absolute", scale: "shared", expandedErrorDevices: new Set() };
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
@@ -1112,6 +1141,7 @@ function renderCompare() {
   renderCompareSignalSelect(els.compareSignalSelect3, signals, state.compare.signals[2], true);
   els.compareAlignmentSelect.value = state.compare.alignment;
   els.compareScaleSelect.value = state.compare.scale;
+  syncCompareHoverControls();
   els.compareDeviceCount.textContent = `${state.devices.length.toLocaleString()} EV${state.devices.length === 1 ? "" : "s"}`;
 
   const rows = compareRowsForSignals(selectedCompareSignals());
@@ -1705,6 +1735,12 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
           point,
           series,
           row,
+          xExtent,
+          yExtent: [...yExtent],
+          laneTop: top,
+          laneHeight: laneH,
+          plotWidth: plotW,
+          margin,
         });
       }
     });
@@ -2060,18 +2096,82 @@ function showCompareTooltip(hit, canvasRect) {
   const timeLabel = state.compare.alignment === "relative"
     ? formatDuration(hit.point.x / 1000)
     : formatFullX(hit.point.originalTime);
+  const readouts = compareHoverReadouts(hit);
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+  drawCompareHoverMarkers(hit.canvas, readouts, hit.x);
   els.compareTooltip.innerHTML = `
-    <strong>${escapeHtml(hit.series.column.label)}</strong>
+    <strong>${readouts.length > 1 ? "Compare values" : escapeHtml(hit.series.column.label)}</strong>
     <span>${escapeHtml(hit.row.device.name)}</span>
     <span>${escapeHtml(timeLabel)}</span>
-    <span>${escapeHtml(`${formatNumber(hit.point.y)}${hit.series.unit ? ` ${hit.series.unit}` : ""}`)}</span>
+    <div class="tooltip-series-list">
+      ${readouts.map((readout) => `
+        <div class="tooltip-series-row">
+          <span class="tooltip-swatch" style="background:${escapeAttr(readout.series.color)}"></span>
+          <span class="tooltip-label">${escapeHtml(shorten(readout.series.column.label, 28))}</span>
+          <strong>${escapeHtml(formatSeriesPointValue(readout))}</strong>
+        </div>
+      `).join("")}
+    </div>
   `;
   const localLeft = canvasRect.left - wrapRect.left + hit.x + 12;
-  const localTop = canvasRect.top - wrapRect.top + hit.y - 58;
-  const tooltipWidth = 250;
+  const localTop = canvasRect.top - wrapRect.top + hit.y - 48 - Math.min(6, readouts.length) * 18;
+  const tooltipWidth = readouts.length > 1 ? 310 : 250;
   els.compareTooltip.style.left = `${Math.min(wrapRect.width - tooltipWidth - 10, Math.max(10, localLeft))}px`;
   els.compareTooltip.style.top = `${Math.max(10, localTop)}px`;
   els.compareTooltip.style.display = "block";
+}
+
+function compareHoverReadouts(anchorHit) {
+  const selected = selectedCompareSignals();
+  const enabledHeaders = new Set([...compareHoverIndexes()]
+    .map((index) => state.compare.signals[index])
+    .filter((header) => header && selected.includes(header)));
+  if (!enabledHeaders.size) enabledHeaders.add(anchorHit.series.header);
+
+  const readouts = anchorHit.row.series
+    .filter((series) => enabledHeaders.has(series.header))
+    .map((series) => {
+      const point = nearestPointByTime(series.points, anchorHit.point.x);
+      return point ? { series, point } : null;
+    })
+    .filter(Boolean);
+
+  if (!readouts.some((readout) => readout.series.header === anchorHit.series.header)) {
+    readouts.unshift({ series: anchorHit.series, point: anchorHit.point });
+  }
+
+  return readouts;
+}
+
+function drawCompareHoverMarkers(canvas, readouts, anchorX) {
+  const hits = state.compareHitPoints.filter((hit) => hit.canvas === canvas);
+  const anchorHit = hits[0];
+  if (!anchorHit) return;
+  const local = canvas.getContext("2d");
+  local.save();
+  local.beginPath();
+  local.setLineDash([2, 5]);
+  local.strokeStyle = "rgba(255, 255, 255, 0.36)";
+  const plotBottom = Math.max(...hits.map((hit) => hit.laneTop + hit.laneHeight));
+  local.moveTo(anchorX, anchorHit.margin.top);
+  local.lineTo(anchorX, plotBottom);
+  local.stroke();
+  local.setLineDash([]);
+
+  readouts.forEach((readout) => {
+    const laneHit = hits.find((hit) => hit.series.header === readout.series.header);
+    if (!laneHit) return;
+    const x = laneHit.margin.left + (readout.point.x - laneHit.xExtent[0]) / (laneHit.xExtent[1] - laneHit.xExtent[0]) * laneHit.plotWidth;
+    const y = laneHit.laneTop + laneHit.laneHeight - (readout.point.y - laneHit.yExtent[0]) / (laneHit.yExtent[1] - laneHit.yExtent[0]) * laneHit.laneHeight;
+    local.beginPath();
+    local.arc(x, y, 4.5, 0, Math.PI * 2);
+    local.fillStyle = cssVar("--panel");
+    local.fill();
+    local.lineWidth = 2.5;
+    local.strokeStyle = readout.series.color;
+    local.stroke();
+  });
+  local.restore();
 }
 
 function showCompareStatusTooltip(hit, canvasRect) {

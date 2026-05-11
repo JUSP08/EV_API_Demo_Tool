@@ -615,6 +615,26 @@ textarea {
   color: #c7d8d2;
 }
 
+.compare-readout-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  color: #c7d8d2;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.compare-readout-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.compare-readout-option span {
+  color: #c7d8d2;
+}
+
 .plot-area {
   position: relative;
   min-height: 420px;

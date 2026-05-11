@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Dashboard Plus</title>
-    <link rel="stylesheet" href="./styles.css?v=20260511-hoverreadouts" />
+    <link rel="stylesheet" href="./styles.css?v=20260511-comparehoverreadouts" />
   </head>
   <body>
     <main class="app-shell">
@@ -131,14 +131,26 @@
             <label class="field">
               Signal 1
               <select id="compareSignalSelect"></select>
+              <span class="compare-readout-option">
+                <input data-compare-hover-index="0" type="checkbox" checked />
+                <span>Hover readout</span>
+              </span>
             </label>
             <label class="field">
               Signal 2
               <select id="compareSignalSelect2"></select>
+              <span class="compare-readout-option">
+                <input data-compare-hover-index="1" type="checkbox" checked />
+                <span>Hover readout</span>
+              </span>
             </label>
             <label class="field">
               Signal 3
               <select id="compareSignalSelect3"></select>
+              <span class="compare-readout-option">
+                <input data-compare-hover-index="2" type="checkbox" checked />
+                <span>Hover readout</span>
+              </span>
             </label>
             <label class="field">
               Time alignment
@@ -379,7 +391,7 @@
         </section>
       </section>
     </main>
-    <script src="./vendor/pptxgen.min.js?v=20260511-hoverreadouts"></script>
-    <script src="./app.js?v=20260511-hoverreadouts"></script>
+    <script src="./vendor/pptxgen.min.js?v=20260511-comparehoverreadouts"></script>
+    <script src="./app.js?v=20260511-comparehoverreadouts"></script>
   </body>
 </html>
