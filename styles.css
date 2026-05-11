@@ -565,7 +565,7 @@ textarea {
   line-height: 1.25;
 }
 
-.column-row span {
+.column-row > div > span {
   display: block;
   color: var(--muted);
   font-size: 12px;
@@ -593,6 +593,26 @@ textarea {
   margin-top: 7px;
   padding: 6px;
   font-size: 12px;
+}
+
+.hover-readout-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #c7d8d2;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.hover-readout-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.hover-readout-option span {
+  color: #c7d8d2;
 }
 
 .plot-area {
@@ -727,6 +747,44 @@ textarea {
 .plot-tooltip span {
   display: block;
   color: var(--muted);
+}
+
+.tooltip-series-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.tooltip-series-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.plot-tooltip .tooltip-swatch {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.plot-tooltip .tooltip-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #d3e1dd;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-tooltip .tooltip-series-row strong {
+  display: block;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 canvas {

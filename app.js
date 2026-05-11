@@ -107,6 +107,7 @@ const state = {
   rows: [],
   columns: [],
   selected: new Set(),
+  hoverSeries: new Set(),
   units: new Map(),
   zoom: null,
   plotSearch: "",
@@ -126,6 +127,7 @@ const state = {
   hitOperationEvents: [],
   compareHitPoints: [],
   compareStatusHits: [],
+  plotSeries: [],
   compareExport: null,
   plotBounds: null,
   dragZoom: null,
@@ -266,6 +268,7 @@ els.plotColumnSearch.addEventListener("input", () => {
 
 els.recommendedPlotButton.addEventListener("click", () => {
   state.selected = new Set(defaultSelectedColumns(state.columns));
+  state.hoverSeries = new Set(state.selected);
   renderColumnList();
   drawPlot();
   renderSeriesTable();
@@ -308,6 +311,7 @@ els.runAiAnalysisButton.addEventListener("click", runAiAnalysis);
 
 els.clearPlotButton.addEventListener("click", () => {
   state.selected.clear();
+  state.hoverSeries.clear();
   renderColumnList();
   drawPlot();
   renderSeriesTable();
@@ -476,6 +480,7 @@ function loadCsvBatch(files, append = false) {
 
   const previousSelected = new Set(state.selected);
   const previousUnits = new Map(state.units);
+  const previousHoverSeries = new Set(state.hoverSeries);
   const hasExistingTrend = append && state.rows.length;
   const primaryHeaders = hasExistingTrend ? state.headers : parsedFiles[0].parsed.headers;
   const trendFiles = parsedFiles.filter((file) => headersMatch(file.parsed.headers, primaryHeaders));
@@ -510,13 +515,14 @@ function loadCsvBatch(files, append = false) {
     console.info(`${compareOnly.length} CSV file(s) had different columns and were added to Compare only.`);
   }
 
-  refreshCsvStateAfterLoad(previousSelected, previousUnits, hasExistingTrend);
+  refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHoverSeries, hasExistingTrend);
 }
 
 function loadCsv(text, filename, append = false) {
   const parsed = parseDatalogCsv(text);
   const previousSelected = new Set(state.selected);
   const previousUnits = new Map(state.units);
+  const previousHoverSeries = new Set(state.hoverSeries);
   const device = createDeviceDataset(parsed, filename);
 
   if (append && state.rows.length) {
@@ -524,7 +530,7 @@ function loadCsv(text, filename, append = false) {
       && parsed.headers.every((header, index) => header === state.headers[index]);
     if (!sameHeaders) {
       addOrMergeDevice(device);
-      refreshCsvStateAfterLoad(previousSelected, previousUnits, true);
+      refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHoverSeries, true);
       return;
     }
 
@@ -539,15 +545,19 @@ function loadCsv(text, filename, append = false) {
     state.devices = [device];
   }
 
-  refreshCsvStateAfterLoad(previousSelected, previousUnits, append);
+  refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHoverSeries, append);
 }
 
-function refreshCsvStateAfterLoad(previousSelected, previousUnits, append) {
+function refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHoverSeries, append) {
   state.columns = state.headers.map((header) => inferColumn(header, state.rows));
   state.selected = append && previousSelected.size
     ? new Set([...previousSelected].filter((header) => state.headers.includes(header)))
     : new Set(defaultSelectedColumns(state.columns));
   if (!state.selected.size) state.selected = new Set(defaultSelectedColumns(state.columns));
+  const retainedHoverSeries = [...previousHoverSeries].filter((header) => state.selected.has(header));
+  state.hoverSeries = append
+    ? new Set(retainedHoverSeries)
+    : new Set(state.selected);
   state.units = new Map();
   state.columns.forEach((column) => {
     state.units.set(column.header, previousUnits.get(column.header) ?? defaultUnit(column));
@@ -771,6 +781,7 @@ function resetDataset() {
   state.rows = [];
   state.columns = [];
   state.selected = new Set();
+  state.hoverSeries = new Set();
   state.units = new Map();
   state.zoom = null;
   state.plotSearch = "";
@@ -781,6 +792,7 @@ function resetDataset() {
   state.hitOperationEvents = [];
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.plotSeries = [];
   state.compareExport = null;
   state.plotBounds = null;
   state.dragZoom = null;
@@ -2835,12 +2847,26 @@ function renderColumnList() {
     `;
   }).join("") || `<div class="muted">No matching signals.</div>`;
 
-  els.plotColumnList.querySelectorAll("input[type='checkbox']").forEach((input) => {
+  els.plotColumnList.querySelectorAll(".plot-select-checkbox").forEach((input) => {
     input.addEventListener("change", () => {
-      if (input.checked) state.selected.add(input.dataset.column);
-      else state.selected.delete(input.dataset.column);
+      if (input.checked) {
+        state.selected.add(input.dataset.column);
+        state.hoverSeries.add(input.dataset.column);
+      } else {
+        state.selected.delete(input.dataset.column);
+        state.hoverSeries.delete(input.dataset.column);
+      }
       drawPlot();
+      renderColumnList();
       renderSeriesTable();
+    });
+  });
+
+  els.plotColumnList.querySelectorAll(".hover-readout-checkbox").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) state.hoverSeries.add(input.dataset.column);
+      else state.hoverSeries.delete(input.dataset.column);
+      drawPlot();
     });
   });
 
@@ -2855,11 +2881,12 @@ function renderColumnList() {
 
 function renderColumnOption(column) {
     const checked = state.selected.has(column.header) ? "checked" : "";
+    const hoverChecked = state.hoverSeries.has(column.header) ? "checked" : "";
     const unitSelect = renderUnitSelect(column);
     return `
-      <label class="column-row ${checked ? "selected" : ""}">
-        <input type="checkbox" data-column="${escapeAttr(column.header)}" ${checked} />
-        <span>
+      <div class="column-row ${checked ? "selected" : ""}">
+        <input class="plot-select-checkbox" type="checkbox" data-column="${escapeAttr(column.header)}" ${checked} />
+        <div>
           <strong>${escapeHtml(column.label)}</strong>
           <span class="column-meta">
             ${column.registerId ? `<span class="column-chip">Reg ${escapeHtml(column.registerId)}</span>` : ""}
@@ -2867,8 +2894,14 @@ function renderColumnOption(column) {
             ${column.unit ? `<span class="column-chip">${escapeHtml(column.unit)}</span>` : ""}
           </span>
           ${unitSelect}
-        </span>
-      </label>
+          ${checked ? `
+            <label class="hover-readout-option">
+              <input class="hover-readout-checkbox" type="checkbox" data-column="${escapeAttr(column.header)}" ${hoverChecked} />
+              <span>Hover readout</span>
+            </label>
+          ` : ""}
+        </div>
+      </div>
     `;
 }
 
@@ -3119,6 +3152,7 @@ function drawPlot() {
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
+  state.plotSeries = [];
   hidePlotTooltip();
   const series = selectedSeries().filter((item) => item.points.length > 1);
   const operationLanes = els.operationsOverlayToggle.checked ? getOperationLanes() : [];
@@ -3144,6 +3178,7 @@ function drawPlot() {
     ...item,
     points: item.points.filter((point) => point.x >= xExtent[0] && point.x <= xExtent[1]),
   })).filter((item) => item.points.length > 1);
+  state.plotSeries = visibleSeries;
   const visiblePoints = visibleSeries.flatMap((item) => item.points);
   const visibleOperationEvents = operationLanes.flatMap((lane) => lane.events).filter((event) => event.time >= xExtent[0] && event.time <= xExtent[1]);
   if (!visiblePoints.length && !visibleOperationEvents.length) {
@@ -3236,29 +3271,91 @@ function handlePlotHover(event) {
   }
 
   drawPlot();
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(nearest.x, nearest.y, 4.5, 0, Math.PI * 2);
-  ctx.fillStyle = cssVar("--panel");
-  ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = nearest.series.color;
-  ctx.stroke();
-  ctx.restore();
+  const readouts = trendHoverReadouts(nearest);
+  drawTrendHoverMarkers(readouts, nearest.x);
 
-  const value = `${formatNumber(nearest.point.y)}${nearest.series.unit ? ` ${nearest.series.unit}` : ""}`;
   els.plotTooltip.innerHTML = `
-    <strong>${escapeHtml(nearest.series.column.label)}</strong>
+    <strong>${readouts.length > 1 ? "Trend values" : escapeHtml(nearest.series.column.label)}</strong>
     <span>${escapeHtml(formatFullX(nearest.point.x))}</span>
-    <span>${escapeHtml(value)}</span>
+    <div class="tooltip-series-list">
+      ${readouts.map((readout) => `
+        <div class="tooltip-series-row">
+          <span class="tooltip-swatch" style="background:${escapeAttr(readout.series.color)}"></span>
+          <span class="tooltip-label">${escapeHtml(shorten(readout.series.column.label, 28))}</span>
+          <strong>${escapeHtml(formatSeriesPointValue(readout))}</strong>
+        </div>
+      `).join("")}
+    </div>
   `;
 
-  const tooltipWidth = 230;
+  const tooltipWidth = readouts.length > 1 ? 300 : 230;
   const left = Math.min(rect.width - tooltipWidth - 10, Math.max(10, nearest.x + 12));
-  const top = Math.max(10, nearest.y - 58);
+  const top = Math.max(10, nearest.y - 48 - Math.min(6, readouts.length) * 18);
   els.plotTooltip.style.left = `${left}px`;
   els.plotTooltip.style.top = `${top}px`;
   els.plotTooltip.style.display = "block";
+}
+
+function trendHoverReadouts(anchorHit) {
+  const enabledHeaders = new Set([...state.hoverSeries].filter((header) => state.selected.has(header)));
+  if (!enabledHeaders.size) enabledHeaders.add(anchorHit.series.column.header);
+
+  const readouts = state.plotSeries
+    .filter((series) => enabledHeaders.has(series.column.header))
+    .map((series) => {
+      const point = nearestPointByTime(series.points, anchorHit.point.x);
+      return point ? { series, point } : null;
+    })
+    .filter(Boolean);
+
+  if (!readouts.some((readout) => readout.series.column.header === anchorHit.series.column.header)) {
+    readouts.unshift({ series: anchorHit.series, point: anchorHit.point });
+  }
+
+  return readouts;
+}
+
+function nearestPointByTime(points, time) {
+  let nearest = null;
+  let distance = Infinity;
+  points.forEach((point) => {
+    const currentDistance = Math.abs(point.x - time);
+    if (currentDistance < distance) {
+      nearest = point;
+      distance = currentDistance;
+    }
+  });
+  return nearest;
+}
+
+function drawTrendHoverMarkers(readouts, anchorX) {
+  if (!state.plotBounds) return;
+  const { margin, width, height, xExtent, yExtent } = state.plotBounds;
+  ctx.save();
+  ctx.beginPath();
+  ctx.setLineDash([2, 5]);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.36)";
+  ctx.moveTo(anchorX, margin.top);
+  ctx.lineTo(anchorX, margin.top + height);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  readouts.forEach((readout) => {
+    const x = margin.left + (readout.point.x - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+    const y = margin.top + height - (readout.point.y - yExtent[0]) / (yExtent[1] - yExtent[0]) * height;
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = cssVar("--panel");
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = readout.series.color;
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function formatSeriesPointValue(readout) {
+  return `${formatNumber(readout.point.y)}${readout.series.unit ? ` ${readout.series.unit}` : ""}`;
 }
 
 function hidePlotTooltip() {
