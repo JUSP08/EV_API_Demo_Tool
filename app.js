@@ -123,6 +123,7 @@ const state = {
     scale: "shared",
     zoom: null,
     dragZoom: null,
+    operationsOverlay: true,
     expandedErrorDevices: new Set(),
   },
   hitPoints: [],
@@ -130,6 +131,7 @@ const state = {
   hitOperationEvents: [],
   compareHitPoints: [],
   compareStatusHits: [],
+  compareOperationHits: [],
   comparePlotBounds: new Map(),
   plotSeries: [],
   compareExport: null,
@@ -173,6 +175,7 @@ const els = {
   compareHoverToggles: document.querySelectorAll("[data-compare-hover-index]"),
   compareAlignmentSelect: document.getElementById("compareAlignmentSelect"),
   compareScaleSelect: document.getElementById("compareScaleSelect"),
+  compareOperationsOverlayToggle: document.getElementById("compareOperationsOverlayToggle"),
   compareDeviceCount: document.getElementById("compareDeviceCount"),
   compareReportSubtitle: document.getElementById("compareReportSubtitle"),
   compareSummary: document.getElementById("compareSummary"),
@@ -308,6 +311,11 @@ els.compareAlignmentSelect.addEventListener("change", () => {
 
 els.compareScaleSelect.addEventListener("change", () => {
   state.compare.scale = els.compareScaleSelect.value;
+  renderCompare();
+});
+
+els.compareOperationsOverlayToggle.addEventListener("change", () => {
+  state.compare.operationsOverlay = els.compareOperationsOverlayToggle.checked;
   renderCompare();
 });
 
@@ -604,6 +612,7 @@ function refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHover
   state.zoom = null;
   state.compare.zoom = null;
   state.compare.dragZoom = null;
+  if (state.compare.operationsOverlay === undefined) state.compare.operationsOverlay = true;
   const compareHeaders = new Set(commonCompareSignals().map((signal) => signal.header));
   if (!state.compare.signals.length || state.compare.signals.every((header) => !compareHeaders.has(header))) {
     state.compare.signals = defaultCompareSignals();
@@ -827,12 +836,13 @@ function resetDataset() {
   state.zoom = null;
   state.plotSearch = "";
   state.flowGuide = { enabled: false, value: "" };
-  state.compare = { signal: "", signals: [], hoverIndexes: new Set([0, 1, 2]), alignment: "absolute", scale: "shared", zoom: null, dragZoom: null, expandedErrorDevices: new Set() };
+  state.compare = { signal: "", signals: [], hoverIndexes: new Set([0, 1, 2]), alignment: "absolute", scale: "shared", zoom: null, dragZoom: null, operationsOverlay: true, expandedErrorDevices: new Set() };
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.compareOperationHits = [];
   state.comparePlotBounds = new Map();
   state.plotSeries = [];
   state.compareExport = null;
@@ -1132,6 +1142,7 @@ function renderCompare() {
   if (!signals.length || !state.devices.length) {
     state.compareHitPoints = [];
     state.compareStatusHits = [];
+    state.compareOperationHits = [];
     hideCompareTooltip();
     els.compareDeviceCount.textContent = "0 EVs";
     els.compareSignalSelect.innerHTML = `<option value="">No common signals</option>`;
@@ -1154,6 +1165,8 @@ function renderCompare() {
   renderCompareSignalSelect(els.compareSignalSelect3, signals, state.compare.signals[2], true);
   els.compareAlignmentSelect.value = state.compare.alignment;
   els.compareScaleSelect.value = state.compare.scale;
+  els.compareOperationsOverlayToggle.checked = state.compare.operationsOverlay && getOperationLanes().length > 0;
+  els.compareOperationsOverlayToggle.disabled = !getOperationLanes().length;
   syncCompareHoverControls();
   els.compareDeviceCount.textContent = `${state.devices.length.toLocaleString()} EV${state.devices.length === 1 ? "" : "s"}`;
 
@@ -1199,7 +1212,11 @@ function isCompareErrorExpanded(device) {
 
 function compareCanvasHeight(device) {
   const expandedLaneCount = isCompareErrorExpanded(device) ? getCompareErrorDetailLanes(device).length : 0;
-  return COMPARE_CANVAS_BASE_HEIGHT + expandedLaneCount * COMPARE_STATUS_LANE_STEP;
+  const operationLaneCount = getCompareOperationLanes(device).length;
+  return COMPARE_CANVAS_BASE_HEIGHT
+    + expandedLaneCount * COMPARE_STATUS_LANE_STEP
+    + operationLaneCount * COMPARE_STATUS_LANE_STEP
+    + (operationLaneCount ? 24 : 0);
 }
 
 function compareFileLabel(device) {
@@ -1655,6 +1672,7 @@ function renderCompareSummary(rows) {
 function drawComparePlots(rows) {
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.compareOperationHits = [];
   state.comparePlotBounds = new Map();
   hideCompareTooltip();
   if (!rows.length) return;
@@ -1706,8 +1724,10 @@ function drawCompareCanvas(canvas, row, sharedX, fullXExtent, sharedYByHeader, r
   const plotW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
   const statusLanes = getCompareStatusLanes(row.device);
+  const operationLanes = getCompareOperationLanes(row.device);
   const statusBlockH = statusLanes.length ? 24 + statusLanes.length * 22 : 0;
-  const plotInnerH = Math.max(110, innerH - statusBlockH);
+  const operationBlockH = operationLanes.length ? 24 + operationLanes.length * 22 : 0;
+  const plotInnerH = Math.max(110, innerH - statusBlockH - operationBlockH);
   const laneGap = 10;
   const laneH = (plotInnerH - Math.max(0, row.series.length - 1) * laneGap) / row.series.length;
   const xExtent = sharedX;
@@ -1777,7 +1797,9 @@ function drawCompareCanvas(canvas, row, sharedX, fullXExtent, sharedYByHeader, r
     local.stroke();
   });
 
-  drawCompareStatusBands(local, row, statusLanes, margin, plotW, margin.top + plotInnerH + 22, xExtent);
+  const statusTop = margin.top + plotInnerH + 22;
+  drawCompareStatusBands(local, row, statusLanes, margin, plotW, statusTop, xExtent);
+  drawCompareOperationBands(local, row, operationLanes, margin, plotW, statusTop + statusBlockH, xExtent);
   drawCompareZoomSelection(local, canvas, margin, plotInnerH);
 
   local.fillStyle = cssVar("--muted");
@@ -2074,6 +2096,56 @@ function pushCompareStatusHit(local, row, lane, segment, x1, x2, y, laneHeight) 
   });
 }
 
+function drawCompareOperationBands(local, row, lanes, margin, width, top, xExtent) {
+  if (!lanes.length) return;
+  const laneHeight = 18;
+  const laneGap = 4;
+
+  local.save();
+  local.font = "11px Inter, system-ui, sans-serif";
+  local.fillStyle = cssVar("--muted");
+  local.fillText("Operations overlay", margin.left, top - 8);
+
+  lanes.forEach((lane, laneIndex) => {
+    const y = top + laneIndex * (laneHeight + laneGap);
+    const color = OPERATION_COLORS[lane.id] ?? OPERATION_COLORS.system;
+    local.fillStyle = cssVar("--panel-soft");
+    local.fillRect(margin.left, y, width, laneHeight);
+
+    lane.events
+      .filter((event) => event.compareTime >= xExtent[0] && event.compareTime <= xExtent[1])
+      .forEach((event) => {
+        const x = margin.left + (event.compareTime - xExtent[0]) / (xExtent[1] - xExtent[0]) * width;
+        local.fillStyle = color;
+        local.globalAlpha = event.severity === "Error" ? 0.96 : 0.78;
+        local.beginPath();
+        local.arc(x, y + laneHeight / 2, event.severity === "Error" ? 4.8 : 3.8, 0, Math.PI * 2);
+        local.fill();
+        local.globalAlpha = 1;
+        if (lane.id === "control") {
+          local.fillStyle = cssVar("--ink");
+          local.fillText(shorten(event.modeLabel ?? "", 14), x + 6, y + 13);
+        }
+        state.compareOperationHits.push({
+          canvas: local.canvas,
+          row,
+          lane,
+          event,
+          x1: x - 7,
+          x2: x + 7,
+          y1: y + 2,
+          y2: y + laneHeight - 2,
+        });
+      });
+
+    local.fillStyle = "rgba(13, 20, 18, 0.78)";
+    local.fillRect(8, y + 2, margin.left - 16, laneHeight - 4);
+    local.fillStyle = cssVar("--ink");
+    local.fillText(shorten(lane.label, 18), 12, y + 13);
+  });
+  local.restore();
+}
+
 function handleComparePlotClick(event) {
   const button = event.target.closest?.(".compare-expand-button");
   if (!button) return;
@@ -2092,7 +2164,7 @@ function handleCompareHover(event) {
     updateCompareZoomDrag(event);
     return;
   }
-  if (!state.compareHitPoints.length && !state.compareStatusHits.length) return hideCompareTooltip();
+  if (!state.compareHitPoints.length && !state.compareStatusHits.length && !state.compareOperationHits.length) return hideCompareTooltip();
   const canvas = event.target.closest?.(".compare-canvas");
   if (!canvas) return hideCompareTooltip();
   const rect = canvas.getBoundingClientRect();
@@ -2108,6 +2180,18 @@ function handleCompareHover(event) {
   ));
   if (statusHit) {
     showCompareStatusTooltip(statusHit, rect);
+    return;
+  }
+
+  const operationHit = state.compareOperationHits.find((hit) => (
+    hit.canvas === canvas
+    && mouseX >= hit.x1
+    && mouseX <= hit.x2
+    && mouseY >= hit.y1
+    && mouseY <= hit.y2
+  ));
+  if (operationHit) {
+    showCompareOperationTooltip(operationHit, rect);
     return;
   }
 
@@ -2335,6 +2419,27 @@ function showCompareStatusTooltip(hit, canvasRect) {
   const localLeft = canvasRect.left - wrapRect.left + Math.min(hit.x2 - 10, Math.max(hit.x1 + 12, (hit.x1 + hit.x2) / 2));
   const localTop = canvasRect.top - wrapRect.top + hit.y1 - 72;
   const tooltipWidth = 280;
+  els.compareTooltip.style.left = `${Math.min(wrapRect.width - tooltipWidth - 10, Math.max(10, localLeft))}px`;
+  els.compareTooltip.style.top = `${Math.max(10, localTop)}px`;
+  els.compareTooltip.style.display = "block";
+}
+
+function showCompareOperationTooltip(hit, canvasRect) {
+  const wrapRect = els.comparePlots.parentElement.getBoundingClientRect();
+  const event = hit.event;
+  const title = event.label || `${event.severity ?? "Event"} / ${event.component ?? hit.lane.label}`;
+  const timeLabel = state.compare.alignment === "relative"
+    ? formatDuration(event.compareTime / 1000)
+    : formatFullX(event.time);
+  els.compareTooltip.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(hit.row.device.name)}</span>
+    <span>${escapeHtml(timeLabel)}</span>
+    <span>${escapeHtml(shorten(event.message ?? "", 180))}</span>
+  `;
+  const localLeft = canvasRect.left - wrapRect.left + hit.x2 + 8;
+  const localTop = canvasRect.top - wrapRect.top + hit.y1 - 58;
+  const tooltipWidth = 290;
   els.compareTooltip.style.left = `${Math.min(wrapRect.width - tooltipWidth - 10, Math.max(10, localLeft))}px`;
   els.compareTooltip.style.top = `${Math.max(10, localTop)}px`;
   els.compareTooltip.style.display = "block";
@@ -3870,6 +3975,18 @@ function getOperationLanes() {
   return lanes
     .map((lane) => ({ ...lane, events: lane.events.filter((event) => Number.isFinite(event.time)).sort((a, b) => a.time - b.time) }))
     .filter((lane) => lane.events.length);
+}
+
+function getCompareOperationLanes(device) {
+  if (!state.compare.operationsOverlay) return [];
+  const baseTime = firstDeviceTime(device);
+  return getOperationLanes().map((lane) => ({
+    ...lane,
+    events: lane.events.map((event) => ({
+      ...event,
+      compareTime: compareStatusTime(event.time, baseTime),
+    })).filter((event) => Number.isFinite(event.compareTime)),
+  })).filter((lane) => lane.events.length);
 }
 
 function getControlModeEvents() {
