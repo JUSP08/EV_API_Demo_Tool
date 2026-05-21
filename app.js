@@ -121,6 +121,8 @@ const state = {
     hoverIndexes: new Set([0, 1, 2]),
     alignment: "absolute",
     scale: "shared",
+    zoom: null,
+    dragZoom: null,
     expandedErrorDevices: new Set(),
   },
   hitPoints: [],
@@ -128,6 +130,7 @@ const state = {
   hitOperationEvents: [],
   compareHitPoints: [],
   compareStatusHits: [],
+  comparePlotBounds: new Map(),
   plotSeries: [],
   compareExport: null,
   plotBounds: null,
@@ -242,7 +245,9 @@ els.clearDataButton.addEventListener("click", () => {
 
 els.resetZoomButton.addEventListener("click", () => {
   state.zoom = null;
+  state.compare.zoom = null;
   drawPlot();
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
 });
 
 els.statusOverlayToggle.addEventListener("change", drawPlot);
@@ -297,6 +302,7 @@ els.compareHoverToggles.forEach((input) => {
 
 els.compareAlignmentSelect.addEventListener("change", () => {
   state.compare.alignment = els.compareAlignmentSelect.value;
+  state.compare.zoom = null;
   renderCompare();
 });
 
@@ -315,6 +321,9 @@ els.exportComparePptButton.addEventListener("click", exportComparePowerPoint);
 els.comparePlots.addEventListener("mousemove", handleCompareHover);
 els.comparePlots.addEventListener("mouseleave", hideCompareTooltip);
 els.comparePlots.addEventListener("click", handleComparePlotClick);
+els.comparePlots.addEventListener("mousedown", startCompareZoomDrag);
+els.comparePlots.addEventListener("mouseup", endCompareZoomDrag);
+els.comparePlots.addEventListener("wheel", handleCompareWheel, { passive: false });
 
 els.buildAiPayloadButton.addEventListener("click", () => {
   renderAiPayloadPreview();
@@ -463,6 +472,7 @@ window.addEventListener("resize", () => {
   requestAnimationFrame(() => drawComparePlots(compareRowsForSignals(selectedCompareSignals())));
 });
 window.addEventListener("mouseup", endZoomDrag);
+window.addEventListener("mouseup", endCompareZoomDrag);
 els.canvas.addEventListener("mousemove", handlePlotHover);
 els.canvas.addEventListener("mouseleave", () => {
   if (!state.dragZoom) hidePlotTooltip();
@@ -592,6 +602,8 @@ function refreshCsvStateAfterLoad(previousSelected, previousUnits, previousHover
     state.units.set(column.header, previousUnits.get(column.header) ?? defaultUnit(column));
   });
   state.zoom = null;
+  state.compare.zoom = null;
+  state.compare.dragZoom = null;
   const compareHeaders = new Set(commonCompareSignals().map((signal) => signal.header));
   if (!state.compare.signals.length || state.compare.signals.every((header) => !compareHeaders.has(header))) {
     state.compare.signals = defaultCompareSignals();
@@ -815,12 +827,13 @@ function resetDataset() {
   state.zoom = null;
   state.plotSearch = "";
   state.flowGuide = { enabled: false, value: "" };
-  state.compare = { signal: "", signals: [], hoverIndexes: new Set([0, 1, 2]), alignment: "absolute", scale: "shared", expandedErrorDevices: new Set() };
+  state.compare = { signal: "", signals: [], hoverIndexes: new Set([0, 1, 2]), alignment: "absolute", scale: "shared", zoom: null, dragZoom: null, expandedErrorDevices: new Set() };
   state.hitPoints = [];
   state.hitStatusEvents = [];
   state.hitOperationEvents = [];
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.comparePlotBounds = new Map();
   state.plotSeries = [];
   state.compareExport = null;
   state.plotBounds = null;
@@ -1642,10 +1655,13 @@ function renderCompareSummary(rows) {
 function drawComparePlots(rows) {
   state.compareHitPoints = [];
   state.compareStatusHits = [];
+  state.comparePlotBounds = new Map();
   hideCompareTooltip();
   if (!rows.length) return;
   const allPoints = rows.flatMap((row) => row.points);
-  const sharedX = extent(allPoints.map((point) => point.x));
+  const fullXExtent = extent(allPoints.map((point) => point.x));
+  padTimeExtent(fullXExtent);
+  const sharedX = compareZoomExtent(fullXExtent);
   const sharedYByHeader = {};
   selectedCompareSignals().forEach((header) => {
     const points = rows.flatMap((row) => row.series.find((item) => item.header === header)?.points ?? []);
@@ -1654,17 +1670,30 @@ function drawComparePlots(rows) {
       padExtent(sharedYByHeader[header]);
     }
   });
-  padTimeExtent(sharedX);
-
   document.querySelectorAll(".compare-canvas").forEach((canvas) => {
     const index = Number(canvas.dataset.compareIndex);
     const row = rows[index];
     if (!row) return;
-    drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, index);
+    drawCompareCanvas(canvas, row, sharedX, fullXExtent, sharedYByHeader, index);
   });
 }
 
-function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
+function compareZoomExtent(fullXExtent) {
+  if (!state.compare.zoom) return fullXExtent;
+  const min = Math.max(fullXExtent[0], state.compare.zoom[0]);
+  const max = Math.min(fullXExtent[1], state.compare.zoom[1]);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max - min < 2) {
+    state.compare.zoom = null;
+    return fullXExtent;
+  }
+  if (min <= fullXExtent[0] && max >= fullXExtent[1]) {
+    state.compare.zoom = null;
+    return fullXExtent;
+  }
+  return [min, max];
+}
+
+function drawCompareCanvas(canvas, row, sharedX, fullXExtent, sharedYByHeader, rowIndex) {
   const rect = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
   canvas.width = Math.max(320, Math.floor(rect.width * scale));
@@ -1682,6 +1711,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
   const laneGap = 10;
   const laneH = (plotInnerH - Math.max(0, row.series.length - 1) * laneGap) / row.series.length;
   const xExtent = sharedX;
+  state.comparePlotBounds.set(canvas, { canvas, margin, width: plotW, height: plotInnerH, xExtent, fullXExtent });
 
   local.clearRect(0, 0, width, height);
   local.fillStyle = cssVar("--canvas");
@@ -1748,6 +1778,7 @@ function drawCompareCanvas(canvas, row, sharedX, sharedYByHeader, rowIndex) {
   });
 
   drawCompareStatusBands(local, row, statusLanes, margin, plotW, margin.top + plotInnerH + 22, xExtent);
+  drawCompareZoomSelection(local, canvas, margin, plotInnerH);
 
   local.fillStyle = cssVar("--muted");
   const startLabel = state.compare.alignment === "relative" ? "0" : formatX(xExtent[0]);
@@ -2057,6 +2088,10 @@ function handleComparePlotClick(event) {
 }
 
 function handleCompareHover(event) {
+  if (state.compare.dragZoom) {
+    updateCompareZoomDrag(event);
+    return;
+  }
   if (!state.compareHitPoints.length && !state.compareStatusHits.length) return hideCompareTooltip();
   const canvas = event.target.closest?.(".compare-canvas");
   if (!canvas) return hideCompareTooltip();
@@ -2089,6 +2124,112 @@ function handleCompareHover(event) {
 
   if (!nearest || nearestDistance > 34) return hideCompareTooltip();
   showCompareTooltip(nearest, rect);
+}
+
+function startCompareZoomDrag(event) {
+  const canvas = event.target.closest?.(".compare-canvas");
+  if (!canvas) return;
+  const bounds = state.comparePlotBounds.get(canvas);
+  if (!bounds) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  if (!isInsideComparePlot(bounds, x, y)) return;
+  state.compare.dragZoom = { canvas, startX: x, currentX: x };
+  hideCompareTooltip();
+}
+
+function updateCompareZoomDrag(event) {
+  const drag = state.compare.dragZoom;
+  if (!drag) return;
+  const bounds = state.comparePlotBounds.get(drag.canvas);
+  if (!bounds) return;
+  const rect = drag.canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  drag.currentX = clamp(x, bounds.margin.left, bounds.margin.left + bounds.width);
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+}
+
+function endCompareZoomDrag(event) {
+  const drag = state.compare.dragZoom;
+  if (!drag) return;
+  updateCompareZoomDrag(event);
+  const bounds = state.comparePlotBounds.get(drag.canvas);
+  const startX = drag.startX;
+  const currentX = drag.currentX;
+  state.compare.dragZoom = null;
+  if (!bounds || Math.abs(currentX - startX) < 12) {
+    drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+    return;
+  }
+
+  const x1 = Math.min(startX, currentX);
+  const x2 = Math.max(startX, currentX);
+  const minTime = compareCanvasXToTime(bounds, x1);
+  const maxTime = compareCanvasXToTime(bounds, x2);
+  if (Number.isFinite(minTime) && Number.isFinite(maxTime) && maxTime > minTime) {
+    state.compare.zoom = [minTime, maxTime];
+  }
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+}
+
+function handleCompareWheel(event) {
+  const canvas = event.target.closest?.(".compare-canvas");
+  if (!canvas) return;
+  const bounds = state.comparePlotBounds.get(canvas);
+  if (!bounds) return;
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  if (!isInsideComparePlot(bounds, mouseX, mouseY)) return;
+
+  event.preventDefault();
+  const anchor = compareCanvasXToTime(bounds, mouseX);
+  const currentSpan = bounds.xExtent[1] - bounds.xExtent[0];
+  const fullSpan = bounds.fullXExtent[1] - bounds.fullXExtent[0];
+  const minSpan = Math.min(60 * 1000, Math.max(2, fullSpan));
+  const zoomFactor = event.deltaY < 0 ? 0.82 : 1.22;
+  const nextSpan = clamp(currentSpan * zoomFactor, minSpan, fullSpan);
+  const anchorRatio = (anchor - bounds.xExtent[0]) / currentSpan;
+  let nextMin = anchor - nextSpan * anchorRatio;
+  let nextMax = nextMin + nextSpan;
+
+  if (nextMin < bounds.fullXExtent[0]) {
+    nextMin = bounds.fullXExtent[0];
+    nextMax = nextMin + nextSpan;
+  }
+  if (nextMax > bounds.fullXExtent[1]) {
+    nextMax = bounds.fullXExtent[1];
+    nextMin = nextMax - nextSpan;
+  }
+
+  state.compare.zoom = nextSpan >= fullSpan * 0.995 ? null : [nextMin, nextMax];
+  drawComparePlots(compareRowsForSignals(selectedCompareSignals()));
+}
+
+function isInsideComparePlot(bounds, x, y) {
+  return x >= bounds.margin.left
+    && x <= bounds.margin.left + bounds.width
+    && y >= bounds.margin.top
+    && y <= bounds.margin.top + bounds.height;
+}
+
+function compareCanvasXToTime(bounds, x) {
+  return bounds.xExtent[0] + (x - bounds.margin.left) / bounds.width * (bounds.xExtent[1] - bounds.xExtent[0]);
+}
+
+function drawCompareZoomSelection(local, canvas, margin, height) {
+  const drag = state.compare.dragZoom;
+  if (!drag || drag.canvas !== canvas) return;
+  const x1 = Math.min(drag.startX, drag.currentX);
+  const x2 = Math.max(drag.startX, drag.currentX);
+  local.save();
+  local.fillStyle = "rgba(94, 161, 216, 0.18)";
+  local.strokeStyle = "rgba(94, 161, 216, 0.72)";
+  local.lineWidth = 1;
+  local.fillRect(x1, margin.top, x2 - x1, height);
+  local.strokeRect(x1, margin.top, x2 - x1, height);
+  local.restore();
 }
 
 function showCompareTooltip(hit, canvasRect) {
