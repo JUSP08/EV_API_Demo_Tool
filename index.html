@@ -1,401 +1,78 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dashboard Plus</title>
-    <link rel="stylesheet" href="./styles.css?v=20260521-compareops" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EV API Tester</title>
+    <link rel="stylesheet" href="styles.css?v=20260529-deployable" />
   </head>
   <body>
-    <main class="app-shell">
-      <aside class="sidebar" hidden>
-      </aside>
+    <main class="shell">
+      <header>
+        <p>Energy Valve local API tester</p>
+        <h1>Write Energy Valve Datapoints</h1>
+      </header>
 
-      <section class="workspace">
-        <header class="topbar">
-          <div>
-            <h1>Dashboard Plus</h1>
-            <p id="subtitle">Load datalog CSVs and debug/support logs to correlate trends with system operations.</p>
-          </div>
+      <section class="card connection-card">
+        <div class="grid">
+          <label>
+            <span>Valve IP address</span>
+            <input id="ip" value="169.254.1.1" autocomplete="off" />
+          </label>
 
-        <section class="drop-zone" id="dropZone">
-          <input id="fileInput" type="file" multiple />
-          <div class="drop-mark">+</div>
-          <div>
-            <strong>Drop CSVs or debug bundle files</strong>
-            <span>or click to choose one or more files</span>
-          </div>
-        </section>
-          <div class="toolbar">
-            <button id="sampleButton" type="button">Load workspace sample</button>
-            <button id="clearDataButton" type="button">Clear data</button>
-            <button id="resetZoomButton" type="button">Reset view</button>
-          </div>
-        </header>
+          <label>
+            <span>Second valve IP optional</span>
+            <input id="secondaryIp" placeholder="Optional" autocomplete="off" />
+          </label>
 
-        <nav class="dashboard-nav" aria-label="Dashboard sections">
-          <div class="nav-groups" aria-label="Workflow categories">
-            <button class="nav-group-button active" data-group="review" data-default-tab="trend" type="button">
-              <span>Trend Review</span>
-              <small>Plot, compare, tune</small>
-            </button>
-            <button class="nav-group-button" data-group="diagnostics" data-default-tab="snapshot" type="button">
-              <span>System Diagnostics</span>
-              <small>Health, events, config</small>
-            </button>
-            <button class="nav-group-button" data-group="data" data-default-tab="dataset" type="button">
-              <span>Data Dictionary</span>
-              <small>Signals, status, raw rows</small>
-            </button>
-            <button class="nav-group-button" data-group="ai" data-default-tab="ai" type="button">
-              <span>AI Insights</span>
-              <small>Model-assisted review</small>
-            </button>
-          </div>
-          <div class="tabbar" aria-label="Sections in selected category">
-            <div class="tab-group active" data-tab-group="review">
-              <button class="tab-button active" data-group="review" data-tab="trend" type="button">Trend</button>
-              <button class="tab-button" data-group="review" data-tab="compare" type="button">Compare EVs</button>
-              <button class="tab-button" data-group="review" data-tab="series" type="button">Selected Signals</button>
-            </div>
-            <div class="tab-group" data-tab-group="diagnostics">
-              <button class="tab-button" data-group="diagnostics" data-tab="snapshot" type="button">Snapshot</button>
-              <button class="tab-button" data-group="diagnostics" data-tab="operations" type="button">Operations</button>
-              <button class="tab-button" data-group="diagnostics" data-tab="config" type="button">Config</button>
-              <button class="tab-button" data-group="diagnostics" data-tab="runtime" type="button">Runtime</button>
-              <button class="tab-button" data-group="diagnostics" data-tab="security" type="button">Security</button>
-            </div>
-            <div class="tab-group" data-tab-group="data">
-              <button class="tab-button" data-group="data" data-tab="dataset" type="button">Dataset</button>
-              <button class="tab-button" data-group="data" data-tab="status" type="button">Status Bits</button>
-              <button class="tab-button" data-group="data" data-tab="enums" type="button">Enums</button>
-              <button class="tab-button" data-group="data" data-tab="preview" type="button">Preview</button>
-            </div>
-            <div class="tab-group" data-tab-group="ai">
-              <button class="tab-button" data-group="ai" data-tab="ai" type="button">AI Insights</button>
-            </div>
-          </div>
-        </nav>
+          <label>
+            <span>Username</span>
+            <input id="username" value="admin" autocomplete="username" />
+          </label>
 
-        <section class="tab-panel active" data-panel="trend">
-          <div class="trend-layout">
-            <div class="plot-stack">
-              <section class="panel control-strip">
-                <label class="check-field">
-                  <input id="statusOverlayToggle" type="checkbox" checked />
-                  <span>Status timeline</span>
-                </label>
-                <label class="check-field">
-                  <input id="operationsOverlayToggle" type="checkbox" checked />
-                  <span>Operations overlay</span>
-                </label>
-                <label class="check-field">
-                  <input id="flowGuideToggle" data-flow-guide-toggle type="checkbox" />
-                  <span>Flow guide</span>
-                </label>
-                <label class="field compact-field flow-guide-field">
-                  Flow value
-                  <input id="flowGuideValue" data-flow-guide-value type="number" min="0" step="0.1" placeholder="GPM" disabled />
-                </label>
-              </section>
+          <label>
+            <span>Password</span>
+            <input id="password" type="password" autocomplete="current-password" />
+          </label>
+        </div>
 
-              <section class="plot-area">
-                <canvas id="plotCanvas" width="1200" height="520"></canvas>
-                <div class="plot-tooltip" id="plotTooltip"></div>
-                <div class="empty-state" id="emptyState">
-                  <strong>No data loaded</strong>
-                  <span>Drop the datalog CSV to start plotting.</span>
-                </div>
-              </section>
-            </div>
-
-            <section class="panel plot-picker">
-              <div class="panel-title row-title">
-                <span>Signals</span>
-                <span class="selected-count" id="selectedPlotCount">0 selected</span>
-              </div>
-              <div class="picker-actions">
-                <input id="plotColumnSearch" type="search" placeholder="Search signals" autocomplete="off" />
-                <div class="toolbar left">
-                  <button class="small-button" id="recommendedPlotButton" type="button">Recommended</button>
-                  <button class="small-button" id="clearPlotButton" type="button">Clear</button>
-                </div>
-              </div>
-              <div class="column-list plot-options" id="plotColumnList"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="tab-panel" data-panel="compare">
-          <section class="panel compare-controls">
-            <label class="field">
-              Signal 1
-              <select id="compareSignalSelect"></select>
-              <span class="compare-readout-option">
-                <input data-compare-hover-index="0" type="checkbox" checked />
-                <span>Hover readout</span>
-              </span>
-            </label>
-            <label class="field">
-              Signal 2
-              <select id="compareSignalSelect2"></select>
-              <span class="compare-readout-option">
-                <input data-compare-hover-index="1" type="checkbox" checked />
-                <span>Hover readout</span>
-              </span>
-            </label>
-            <label class="field">
-              Signal 3
-              <select id="compareSignalSelect3"></select>
-              <span class="compare-readout-option">
-                <input data-compare-hover-index="2" type="checkbox" checked />
-                <span>Hover readout</span>
-              </span>
-            </label>
-            <label class="field">
-              Time alignment
-              <select id="compareAlignmentSelect">
-                <option value="absolute">Absolute time</option>
-                <option value="relative">Relative start</option>
-              </select>
-            </label>
-            <label class="field">
-              Y scale
-              <select id="compareScaleSelect">
-                <option value="shared">Shared scale</option>
-                <option value="per-device">Per EV scale</option>
-              </select>
-            </label>
-            <label class="check-field flow-guide-check">
-              <input id="compareOperationsOverlayToggle" type="checkbox" checked />
-              <span>Operations overlay</span>
-            </label>
-            <label class="check-field flow-guide-check">
-              <input id="compareFlowGuideToggle" data-flow-guide-toggle type="checkbox" />
-              <span>Flow guide</span>
-            </label>
-            <label class="field compact-field flow-guide-field">
-              Flow value
-              <input id="compareFlowGuideValue" data-flow-guide-value type="number" min="0" step="0.1" placeholder="GPM" disabled />
-            </label>
-          </section>
-          <section class="panel wide">
-            <div class="panel-title row-title">
-              <span>EV Trend Comparison</span>
-              <span class="compare-title-actions">
-                <button class="small-button" id="exportComparePdfButton" type="button">Export PDF</button>
-                <button class="small-button" id="exportComparePptButton" type="button">Export PPTX</button>
-                <span class="selected-count" id="compareDeviceCount">0 EVs</span>
-              </span>
-            </div>
-            <div id="compareExportStatus" class="export-status" aria-live="polite"></div>
-            <div id="compareReport">
-              <div class="print-report-header">
-                <h2>EV Trend Comparison</h2>
-                <p id="compareReportSubtitle">Generated by Dashboard Plus</p>
-              </div>
-              <div id="compareSummary" class="summary-list muted">Load two or more EV trend CSVs to compare.</div>
-              <div class="compare-plot-wrap">
-                <div id="comparePlots" class="compare-plots"></div>
-                <div class="plot-tooltip compare-tooltip" id="compareTooltip"></div>
-              </div>
-            </div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="operations">
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">System Summary</div>
-              <dl class="stats" id="operationsStats">
-                <div><dt>Status</dt><dd>Waiting for debug files</dd></div>
-              </dl>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Operational Insights</div>
-              <div id="insightSummary" class="insight-list muted">No debug bundle loaded yet.</div>
-            </section>
-          </div>
-          <section class="panel wide">
-            <div class="panel-title">Event Timeline</div>
-            <div id="eventSummary" class="event-list muted">Load event logs to see system, error, and update events.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="config">
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Change Sources</div>
-              <div id="sourceSummary" class="summary-list muted">No configuration changes loaded yet.</div>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Most Changed Paths</div>
-              <div id="configSummary" class="summary-list muted">No UDA configuration changes found yet.</div>
-            </section>
-          </div>
-          <section class="panel wide">
-            <div class="panel-title">Control-Impacting Changes</div>
-            <div id="configImpactSummary" class="summary-list muted">No control-impacting changes loaded yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="runtime">
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Runtime Stats</div>
-              <dl class="stats" id="runtimeStats">
-                <div><dt>Status</dt><dd>Waiting for JVM log</dd></div>
-              </dl>
-            </section>
-            <section class="panel">
-              <div class="panel-title">GC / Load Outliers</div>
-              <div id="runtimeSummary" class="summary-list muted">No JVM events loaded yet.</div>
-            </section>
-          </div>
-        </section>
-
-        <section class="tab-panel" data-panel="security">
-          <section class="panel wide">
-            <div class="panel-title">Security Posture</div>
-            <div id="securitySummary" class="summary-list muted">No security events loaded yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="snapshot">
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Device Identity</div>
-              <dl class="stats" id="deviceSummary">
-                <div><dt>Status</dt><dd>Waiting for debugDeviceInformation.json</dd></div>
-              </dl>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Current Health Snapshot</div>
-              <div id="snapshotSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-            </section>
-          </div>
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Power / Boot / Watchdog</div>
-              <div id="reliabilitySummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Control Health</div>
-              <div id="controlHealthSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-            </section>
-          </div>
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Historical vs Current Faults</div>
-              <div id="faultPerspectiveSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Troubleshooting Counters</div>
-              <div id="troubleshootingSummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-            </section>
-          </div>
-          <section class="panel wide">
-            <div class="panel-title">Prioritized Troubleshooting Findings</div>
-            <div id="prioritySummary" class="summary-list muted">No allDatapoints.json loaded yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="ai">
-          <div class="tab-content-grid ai-grid">
-            <section class="panel">
-              <div class="panel-title">OpenRouter</div>
-              <label class="field">
-                API key
-                <input id="openRouterKey" type="password" autocomplete="off" placeholder="sk-or-..." />
-              </label>
-              <label class="field">
-                Model
-                <input id="openRouterModel" type="text" value="openai/gpt-4o-mini" />
-              </label>
-              <label class="field">
-                Prompt focus
-                <textarea id="aiQuestion" rows="5">Correlate trend CSV operation first, then event.log and jvm_agent runtime events, then allDatapoints snapshot state. Find hidden operational, reliability, watchdog, commissioning, and configuration-change insights. Prioritize likely root causes, supporting evidence, and next troubleshooting steps.</textarea>
-              </label>
-              <div class="toolbar left">
-                <button id="buildAiPayloadButton" type="button">Preview payload</button>
-                <button id="runAiAnalysisButton" type="button">Analyze</button>
-              </div>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Knowledge Base</div>
-              <div id="aiKnowledgeSummary" class="summary-list"></div>
-            </section>
-          </div>
-          <section class="panel wide">
-            <div class="panel-title">Payload Preview</div>
-              <pre id="aiPayloadPreview" class="payload-preview">Load debug data, then preview the payload.</pre>
-          </section>
-          <section class="panel wide">
-            <div class="panel-title">Model Response</div>
-            <div id="aiResult" class="ai-result muted">No model response yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="series">
-          <section class="panel">
-            <div class="panel-title">Selected Series</div>
-            <div class="series-table-wrap">
-              <table class="data-table" id="seriesTable">
-                <thead>
-                  <tr>
-                    <th>Signal</th>
-                    <th>Unit</th>
-                    <th>Min</th>
-                    <th>Max</th>
-                    <th>Mean</th>
-                  </tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="dataset">
-          <div class="tab-content-grid">
-            <section class="panel">
-              <div class="panel-title">Dataset</div>
-              <dl class="stats" id="datasetStats">
-                <div><dt>Status</dt><dd>Waiting for file</dd></div>
-              </dl>
-            </section>
-            <section class="panel">
-              <div class="panel-title">Timestamp Gaps</div>
-              <div id="gapSummary" class="gap-summary muted">No timestamp data loaded yet.</div>
-            </section>
-          </div>
-        </section>
-
-        <section class="tab-panel" data-panel="status">
-          <section class="panel">
-            <div class="panel-title">Status Bits</div>
-            <div id="bitSummary" class="bit-summary muted">No bitfield found yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="enums">
-          <section class="panel">
-            <div class="panel-title">Enums</div>
-            <div id="enumSummary" class="enum-summary muted">No enumerations found yet.</div>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-panel="preview">
-          <section class="panel wide">
-            <div class="panel-title">Data Preview</div>
-            <div class="preview-table-wrap">
-              <table class="data-table compact" id="previewTable"></table>
-            </div>
-          </section>
-        </section>
+        <label class="checkbox-row">
+          <input id="saveLocal" type="checkbox" checked />
+          <span>Save values locally in this browser</span>
+        </label>
       </section>
+
+      <section class="card datapoint-card-shell tool-layout">
+        <div id="datapointList" class="datapoint-list" aria-label="Available datapoints"></div>
+        <aside class="output-state-column" aria-label="Output state endpoints">
+          <h2>Output State</h2>
+          <div id="outputStateList" class="output-state-list"></div>
+        </aside>
+      </section>
+
+      <section class="card response-card">
+        <div class="response-head">
+          <h2>Response</h2>
+          <span id="status" class="status idle">Idle</span>
+        </div>
+        <pre id="response">No request sent yet.</pre>
+      </section>
+
+      <details class="card advanced-card">
+        <summary>Advanced</summary>
+        <label>
+          <span>Selected endpoint</span>
+          <input id="endpoint" value="/api/v1/mpmodelid/2106" autocomplete="off" />
+        </label>
+        <div class="preview">
+          <div>
+            <span>Command preview</span>
+            <code id="preview"></code>
+          </div>
+        </div>
+      </details>
     </main>
-    <script src="./vendor/pptxgen.min.js?v=20260521-compareops"></script>
-    <script src="./app.js?v=20260521-compareops"></script>
+
+    <script src="app.js?v=20260529-deployable"></script>
   </body>
 </html>

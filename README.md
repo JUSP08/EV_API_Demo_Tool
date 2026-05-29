@@ -1,44 +1,66 @@
-# Dashboard Plus
+# EV API Tester
 
-Dashboard Plus is a static browser dashboard for correlating device datalog CSV trends with system-level debug and support logs.
+EV API Tester is a local dashboard for writing and reading BELIMO Energy Valve API datapoints.
 
-It is based on the Device Datalog Dashboard and keeps the same no-build deployment model: open `index.html` through a local static server and load files from the browser.
+It is designed for lab use where the valve is reachable from the PC by a local or link-local IP address such as `169.254.1.1` or `192.168.x.x`.
 
-## What It Loads
+## Run Locally
 
-- Datalog CSV files with `Timestamp - UTC`
-- `debugDeviceInformation.json`
-- `allDatapoints.json`
-- `data/log/event.log*`
-- `data/log/jvm_agent.log`
-- `data/log/bootSlotJournal`
-- `data/log/watchdog.counter`
+Double-click:
 
-## Views
+```text
+Start EV API Tester.bat
+```
 
-- Trend: selected datalog signals with status and operations overlays
-- Operations: system events, errors, network recoveries, updates, and derived insights
-- Config: UnifiedDataAccess changes grouped by source and datapoint path
-- Runtime: JVM agent starts, full-GC events, and load outliers
-- Security: support/security posture events
-- Snapshot: device identity, power-up/watchdog/boot reliability checks, and prioritized all-datapoint troubleshooting findings
-- AI Insights: optional OpenRouter-backed model analysis using a compact summary payload previewed in the browser
-- Series, Dataset, Status, Enums, Preview: inherited datalog inspection tools
-
-## Local Use
-
-From this folder:
+Or run manually:
 
 ```powershell
-python -m http.server 5178
+python server.py
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:5178/index.html
+http://127.0.0.1:8765
 ```
 
-Drop one or more CSV files and/or support bundle files onto the upload area. The trend plot shares one time axis across datapoints and parsed operational events.
+## Dashboard Features
 
-The AI Insights tab does not store an API key in the project. Enter an OpenRouter key in the browser, preview the compact payload, then run analysis when you want to send that summary to the model. The AI payload is ordered for troubleshooting: trend CSV operation first, event/JVM correlation second, and allDatapoints current-state context third. It also includes summarized local knowledge-base notes from the Belimo Energy Valve application guide, differential-pressure-control document, and EV 4 operating manual.
+- Writes Energy Valve override datapoints through the local backend.
+- Uses Windows `curl.exe` behind the scenes with `-k`, `--basic`, and `--noproxy "*"` behavior.
+- Supports an optional second valve IP address for duplicate writes.
+- Polls output-state endpoints from the primary IP.
+- Includes a sinusoidal ramp for `OverrideAbsoluteWaterFlow` / MP `2106`.
+
+## Windows Executable Option
+
+This creates a local Windows executable using PyInstaller.
+
+```powershell
+.\build-windows-exe.ps1
+```
+
+Output:
+
+```text
+dist\EV API Tester\EV API Tester.exe
+```
+
+This option is the simplest deployable desktop-style build because it packages the Python server and opens the browser automatically.
+
+## Electron Option
+
+This wraps the local dashboard in an Electron desktop window.
+
+```powershell
+npm install
+npm run electron
+```
+
+To create an installer/build:
+
+```powershell
+npm run electron:dist
+```
+
+The Electron option still requires Python to be available unless you later bundle the PyInstaller server executable into the Electron package.

@@ -10,3 +10,11 @@ Thumbs.db
 
 # Optional generated screenshots
 dashboard-smoke.png
+
+# Build/dependency outputs
+build/
+dist/
+node_modules/
+*.spec
+*.zip
+out/
